@@ -162,14 +162,35 @@ class SecurityWorkflow(BaseAgent):
         )
 
     def send_notification(self, pkg: str, cve_id: str, version: str, status: str):
-        """Placeholder for sending notifications.
-        
-        This can be easily wired up to Slack/Discord webhooks or an email client.
-        """
+        """Sends a structured notification alert to a webhook (Slack/Discord/Google Chat) if configured."""
         import os
+        import urllib.request
+        import json
+
         webhook_url = os.environ.get("NOTIFICATION_WEBHOOK_URL")
-        if webhook_url:
-            # We would send a webhook payload here
-            pass
-        else:
+        if not webhook_url:
             print(f"[SECURITY NOTIFICATION] [{status}] Package {pkg} {cve_id} version {version}")
+            return
+
+        # Build Slack/Discord-compatible markdown payload
+        status_emoji = "✅" if status == "SUCCESS" else "❌"
+        message = (
+            f"🛡️ **Wintermute Autonomous Patch Alert**\n"
+            f"• **Package**: `{pkg}`\n"
+            f"• **Vulnerability**: `{cve_id}`\n"
+            f"• **Target Version**: `{version}`\n"
+            f"• **Status**: {status_emoji} `{status}`"
+        )
+        
+        payload = {"text": message}
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+        except Exception as e:
+            print(f"[SECURITY NOTIFICATION ERROR] Failed to send webhook alert: {e}")
