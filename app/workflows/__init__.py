@@ -13,13 +13,13 @@
 # limitations under the License.
 
 from app.workflows.import_pkg import ImportWorkflow
-from app.workflows.upgrade import UpgradeWorkflow
 from app.workflows.review import ReviewWorkflow
 from app.workflows.security import SecurityWorkflow
+from app.workflows.upgrade import UpgradeWorkflow
 
 __all__ = [
     "ImportWorkflow",
-    "UpgradeWorkflow",
     "ReviewWorkflow",
     "SecurityWorkflow",
+    "UpgradeWorkflow",
 ]

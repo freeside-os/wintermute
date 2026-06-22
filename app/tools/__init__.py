@@ -12,42 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from app.tools.package_io import (
-    apply_patch,
-    upgrade_package_version,
-    read_package_file,
-    write_package_file,
-)
 from app.tools.compilation import (
-    verify_package,
     build_package,
     read_build_logs,
-)
-from app.tools.feeds import (
-    import_pkgbuild,
-    list_workspace_packages,
-    list_packages,
-    query_security_feeds,
+    verify_package,
 )
 from app.tools.dependency import (
     DependencyGraph,
-    check_version_constraints,
     build_dependency_tree,
+    check_version_constraints,
+)
+from app.tools.feeds import (
+    import_pkgbuild,
+    list_packages,
+    list_workspace_packages,
+    query_security_feeds,
+)
+from app.tools.package_io import (
+    apply_patch,
+    fetch_source_checksum,
+    read_package_file,
+    upgrade_package_version,
+    write_package_file,
 )
 
 __all__ = [
-    "apply_patch",
-    "upgrade_package_version",
-    "read_package_file",
-    "write_package_file",
-    "verify_package",
-    "build_package",
-    "read_build_logs",
-    "import_pkgbuild",
-    "list_workspace_packages",
-    "list_packages",
-    "query_security_feeds",
     "DependencyGraph",
-    "check_version_constraints",
+    "apply_patch",
     "build_dependency_tree",
+    "build_package",
+    "check_version_constraints",
+    "fetch_source_checksum",
+    "import_pkgbuild",
+    "list_packages",
+    "list_workspace_packages",
+    "query_security_feeds",
+    "read_build_logs",
+    "read_package_file",
+    "upgrade_package_version",
+    "verify_package",
+    "write_package_file",
 ]

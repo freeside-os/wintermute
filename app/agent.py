@@ -12,25 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import re
-import json
-from typing import AsyncGenerator
-from pydantic import ConfigDict
+from collections.abc import AsyncGenerator
 
 import google.auth
 from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
-from google.adk.events import Event
 from google.adk.apps import App
+from google.adk.events import Event
 from google.adk.models import Gemini
 from google.genai import types
+from pydantic import ConfigDict
 
 # Try to find and load .env manually to avoid dependency issues
 for env_path in [".env", "../.env", "../../.env", "app/.env"]:
     if os.path.exists(env_path):
         try:
-            with open(env_path, "r", encoding="utf-8") as f:
+            with open(env_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
@@ -62,18 +62,16 @@ elif has_vertex_creds:
 else:
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "False"
 
-# Import tools
 from app.tools import (
-    import_pkgbuild,
-    verify_package,
-    build_package,
-    read_build_logs,
     apply_patch,
+    build_package,
+    fetch_source_checksum,
     list_packages,
     list_workspace_packages,
     query_security_feeds,
-    upgrade_package_version,
+    read_build_logs,
     read_package_file,
+    verify_package,
     write_package_file,
 )
 
@@ -131,9 +129,13 @@ refiner_agent = Agent(
         "and strip glibc-specific extensions.\n"
         "5. README.md: Check if README.md exists. If it does, ensure the Markdown table in README.md is updated "
         "to reflect the current name, version, source URL, and checksum from the package manifest.\n"
+        "6. Automated Source Extraction & Archive Traversal Checks: Parse the sources list in the package manifest (package.manifest). "
+        "Verify if a corresponding extraction command (such as tar -xf, tar -Jxf, tar -zxf, or unzip) for any .tar.* or compressed sources is "
+        "present in the package.justfile build target. Ensure that compile/configure commands run inside the correct extracted directory path "
+        "(e.g. cd $PKG_NAME-* or cd $PKG_NAME-$PKG_VERSION). Use fetch_source_checksum to calculate SHA-256 checksums for any new or modified package source URLs.\n"
         "After editing the files, print a confirmation message outlining what you changed."
     ),
-    tools=[read_package_file, write_package_file]
+    tools=[read_package_file, write_package_file, fetch_source_checksum]
 )
 
 # ------------------------------------------------------------------------------
@@ -151,9 +153,11 @@ builder_agent = Agent(
         "Steps:\n"
         "1. Run `verify_package` to check the package recipe's validity.\n"
         "2. Run `build_package` to compile the package inside the sandboxed container container.\n"
-        "3. If the build fails, run `read_build_logs` to get the stderr compile output. "
-        "Analyze the error (e.g. missing dependencies, Musl header incompatibilities) and use `apply_patch` to "
-        "write a patch file and register it in package.justfile. Then rebuild and check again.\n"
+        "3. If the build fails, run `read_build_logs` to get the filtered stderr compile output. Analyze the error. Use the following Musl & Toolchain troubleshooting lookup table to determine the fix:\n"
+        "   - Redefinition of Inline Functions: If compilation fails due to redefinition of inline functions or inline symbols (e.g. legacy C code compiled on modern GCC), inject `CFLAGS=\"-g -O2 -fgnu89-inline\"` into the build configuration/environment.\n"
+        "   - Missing `argp`: If compilation fails due to missing `argp` functions/headers, add `argp-standalone` to the manifest's build dependencies (`build_dependencies` or `build.dependencies`) and append `LIBS=\"-largp\"` or `LDFLAGS=\"-largp\"` to the compilation command/environment.\n"
+        "   - Missing Documentation Tools: If build fails due to missing document generators (e.g. `makeinfo`), auto-inject variables like `MAKEINFO=true` to prevent errors.\n"
+        "   Then use `apply_patch` to write a patch file and register it in `package.justfile`, or edit the manifest/justfile using `write_package_file` if config changes are needed. Then rebuild and check again.\n"
         "4. Repeat until compile succeeds and verify_package passes successfully.\n"
         "5. README.md: After successful compilation and verification, read the README.md file using `read_package_file`. "
         "Under the '## Upgrade Notes' section, append any valuable extra information about this build run. "
@@ -169,16 +173,16 @@ builder_agent = Agent(
 # ------------------------------------------------------------------------------
 class Workflow(BaseAgent):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     triage_agent: Agent
     refiner_agent: Agent
     builder_agent: Agent
-    
+
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
-        
+
         # Check if we are waiting for operator approval ( UpgradeWorkflow handles approval )
         if state.get("pending_approval"):
             from app.workflows.upgrade import UpgradeWorkflow
@@ -190,7 +194,7 @@ class Workflow(BaseAgent):
             async for event in wf.run_async(ctx):
                 yield event
             return
-        
+
         # Step 1: Run Triage Agent if not already done
         if not state.get("triage_done"):
             yield Event(
@@ -200,11 +204,11 @@ class Workflow(BaseAgent):
                     parts=[types.Part(text="Starting Wintermute Packaging Workflow Coordinator. Activating Importer/Triage Agent...")]
                 )
             )
-            
+
             # Execute triage agent
             async for event in self.triage_agent.run_async(ctx):
                 yield event
-                
+
             # Extract output and set variables in state
             triage_text = state.get("triage_output", "")
             if not triage_text:
@@ -212,13 +216,13 @@ class Workflow(BaseAgent):
                     if ev.author == self.triage_agent.name and ev.content and ev.content.parts:
                         triage_text = ev.content.parts[0].text
                         break
-            
+
             pkg_name = None
             action = "import"
             version = None
             is_security_update = False
             group = "extra"
-            
+
             try:
                 json_match = re.search(r"\{.*\}", triage_text, re.DOTALL)
                 if json_match:
@@ -230,12 +234,12 @@ class Workflow(BaseAgent):
                     group = triage_data.get("group", "extra")
             except Exception:
                 pass
-                
+
             if not pkg_name:
                 pkg_match = re.search(r"(?:package|import|upgrade)\s+([a-zA-Z0-9_\-]+)", triage_text, re.IGNORECASE)
                 if pkg_match:
                     pkg_name = pkg_match.group(1)
-            
+
             if not pkg_name:
                 user_query = ""
                 for ev in ctx.session.events:
@@ -262,7 +266,7 @@ class Workflow(BaseAgent):
                         ver_match = re.search(r"to\s+(?:version\s+)?([0-9\.]+)", user_query, re.IGNORECASE)
                         if ver_match:
                             version = ver_match.group(1)
-            
+
             if not action and ("security" in triage_text.lower() or "cve" in triage_text.lower()):
                 action = "security_audit"
                 pkg_name = "all"
@@ -273,7 +277,7 @@ class Workflow(BaseAgent):
             state["is_security_update"] = is_security_update
             state["group"] = group
             state["triage_done"] = True
-            
+
             yield Event(
                 author=self.name,
                 content=types.Content(
@@ -288,10 +292,10 @@ class Workflow(BaseAgent):
                     )]
                 )
             )
-            
+
         pkg_name = state.get("pkg_name")
         action = state.get("action", "import")
-        
+
         # Route to appropriate workflow subclass
         if action == "security_audit":
             from app.workflows.security import SecurityWorkflow
@@ -321,7 +325,7 @@ class Workflow(BaseAgent):
                 refiner_agent=self.refiner_agent,
                 builder_agent=self.builder_agent
             )
-            
+
         async for event in workflow.run_async(ctx):
             yield event
 

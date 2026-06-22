@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncGenerator
-from pydantic import ConfigDict
+import os
+from collections.abc import AsyncGenerator
 
-from google.adk.agents import BaseAgent, Agent
+from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
+from pydantic import ConfigDict
 
 
 class ImportWorkflow(BaseAgent):
@@ -52,6 +53,56 @@ class ImportWorkflow(BaseAgent):
                     parts=[types.Part(text=f"Import tool result: {res}")]
                 )
             )
+
+        manifest_path = f"/home/dq/Code/freeside/packages/{pkg_name}/package.manifest"
+        if not os.path.exists(manifest_path) or os.path.getsize(manifest_path) == 0:
+            if not state.get("scaffold_done"):
+                yield Event(
+                    author=self.name,
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text=f"Import failed or manifest empty for package {pkg_name}. Activating Scaffolder Agent fallback...")]
+                    )
+                )
+                from google.adk.agents import Agent
+                from google.adk.models import Gemini
+                from google.adk.tools import google_search
+
+                from app.tools import (
+                    fetch_source_checksum,
+                    read_package_file,
+                    write_package_file,
+                )
+
+                scaffold_agent = Agent(
+                    name="scaffolder",
+                    model=Gemini(
+                        model="gemini-3.5-flash",
+                        retry_options=types.HttpRetryOptions(attempts=3),
+                    ),
+                    instruction=(
+                        "You are the Scaffolder Agent for Freeside OS.\n"
+                        f"Your task is to generate a fallback package recipe for '{pkg_name}' because it could not be converted from Arch Linux.\n"
+                        "Steps:\n"
+                        f"1. Use `google_search` to search the web for the package details of '{pkg_name}', including its description, upstream source website/URL, and latest stable release archive URL (typically .tar.gz, .tar.xz, etc.).\n"
+                        "2. Once you find a suitable release archive URL, use the `fetch_source_checksum` tool to download the package and calculate its SHA-256 checksum.\n"
+                        "3. Generate a valid Freeside schema `package.manifest` and a basic `package.justfile` for the package, and write them using `write_package_file`.\n\n"
+                        "Requirements for package.manifest:\n"
+                        "- Must be in TOML format.\n"
+                        "- Root keys: `[package]`, `[build]`, and `[build.environment]` if env variables are needed.\n"
+                        "- Under `[package]`, include: `name` (must be the package name), `version`, `description`, and `group`.\n"
+                        "- Under `[build]`, include: `sources` as an array of tables containing `url` and `hash = { algo = \"sha256\", value = \"...\" }`.\n\n"
+                        "Requirements for package.justfile:\n"
+                        "- Must be a valid justfile format with a `build:` target and a `package:` target.\n"
+                        "- Under the `build:` target, extract the source archive (e.g. `tar -xf ...`), `cd` into the extracted folder (use a version-dynamic directory like `cd $PKG_NAME-*` or `cd $PKG_NAME-$PKG_VERSION`), run configure and make (or other build commands).\n"
+                        "- Under the `package:` target, copy built files/binaries to `$DESTDIR` (e.g. `make DESTDIR=\"$DESTDIR\" install` or manually copy files relative to `$DESTDIR` under `/usr/bin`, `/usr/lib`, etc.). Make sure to enforce chmod 755 on directories and binaries.\n\n"
+                        "Once you have written `package.manifest` and `package.justfile` successfully, print a confirmation report."
+                    ),
+                    tools=[google_search, write_package_file, read_package_file, fetch_source_checksum]
+                )
+                async for event in scaffold_agent.run_async(ctx):
+                    yield event
+                state["scaffold_done"] = True
 
         # Run Recipe Refiner Agent
         if not state.get("refiner_done"):

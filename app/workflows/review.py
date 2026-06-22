@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import tomllib
-from typing import AsyncGenerator
-from pydantic import ConfigDict
+from collections.abc import AsyncGenerator
 
-from google.adk.agents import BaseAgent, Agent
+from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
+from pydantic import ConfigDict
 
 
 class ReviewWorkflow(BaseAgent):
@@ -41,20 +41,20 @@ class ReviewWorkflow(BaseAgent):
                 parts=[types.Part(text=f"Starting package review and compliance enforcement for '{pkg_name}'...")]
             )
         )
-        
+
         # Resolve packages list
         from app.tools import list_workspace_packages
         list_res = list_workspace_packages()
         all_pkgs = set(list_res.get("packages", []))
-        
+
         if pkg_name == "all":
             pkgs_to_review = list(all_pkgs)
         else:
             pkgs_to_review = [pkg_name]
-            
+
         reject_reports = []
         pass_reports = []
-        
+
         for pkg in pkgs_to_review:
             yield Event(
                 author=self.name,
@@ -63,43 +63,43 @@ class ReviewWorkflow(BaseAgent):
                     parts=[types.Part(text=f"Reviewing package [{pkg}]...")]
                 )
             )
-            
+
             # Check for critical dependency mismatch
             from app.tools import read_package_file
             manifest_res = read_package_file(pkg, "package.manifest")
             if manifest_res.get("status") == "error":
                 reject_reports.append(f"Package [{pkg}]: Critical - package.manifest is missing or unreadable.")
                 continue
-                
+
             try:
                 manifest_data = tomllib.loads(manifest_res.get("content", ""))
                 pkg_block = manifest_data.get("package", {})
                 build_block = manifest_data.get("build", {})
-                
+
                 deps = pkg_block.get("dependencies", []) + build_block.get("dependencies", [])
                 missing_deps = [d for d in deps if d not in all_pkgs]
-                
+
                 if missing_deps:
                     reject_reports.append(f"Package [{pkg}]: REJECTED - Lists dependencies that do not exist in the workspace: {', '.join(missing_deps)}")
                     continue
             except Exception as e:
                 reject_reports.append(f"Package [{pkg}]: Critical - Failed to parse package.manifest: {e}")
                 continue
-            
+
             # Check for minor issues
             readme_res = read_package_file(pkg, "README.md")
             has_readme = readme_res.get("status") == "success"
-            
+
             from app.tools import verify_package
             verify_res = verify_package(pkg)
             is_valid = verify_res.get("status") == "success"
-            
+
             minor_issues = []
             if not has_readme:
                 minor_issues.append("Missing README.md")
             if not is_valid:
                 minor_issues.append("Validation errors in manifest/justfile")
-                
+
             if minor_issues:
                 yield Event(
                     author=self.name,
@@ -112,7 +112,7 @@ class ReviewWorkflow(BaseAgent):
                 state["pkg_name"] = pkg
                 async for event in self.refiner_agent.run_async(ctx):
                     yield event
-            
+
             # Check if it builds
             from app.tools import build_package
             build_res = build_package(pkg)
@@ -127,15 +127,15 @@ class ReviewWorkflow(BaseAgent):
                 state["pkg_name"] = pkg
                 async for event in self.builder_agent.run_async(ctx):
                     yield event
-                    
+
                 # Re-verify build
                 build_res = build_package(pkg)
                 if build_res.get("status") == "error":
                     reject_reports.append(f"Package [{pkg}]: REJECTED - Sandbox build compilation failed and could not be auto-patched.")
                     continue
-            
+
             pass_reports.append(f"Package [{pkg}]: PASSED (Enforced successfully with all minor auto-fixes applied)")
-            
+
         # Final output for CI
         report_lines = []
         if reject_reports:
@@ -144,12 +144,12 @@ class ReviewWorkflow(BaseAgent):
                 report_lines.append(f"- ✗ {rep}")
         else:
             report_lines.append("### CI Status: PASS")
-            
+
         if pass_reports:
             report_lines.append("\n### Passed Packages:")
             for rep in pass_reports:
                 report_lines.append(f"- ✓ {rep}")
-                
+
         yield Event(
             author=self.name,
             content=types.Content(

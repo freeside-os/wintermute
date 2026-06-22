@@ -15,6 +15,7 @@
 import os
 import subprocess
 
+
 def import_pkgbuild(pkg_name: str) -> dict:
     """Converts an Arch Linux PKGBUILD to Freeside format.
 
@@ -68,14 +69,14 @@ def list_packages() -> dict:
 
 def query_security_feeds() -> dict:
     """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem."""
+    import json
     import tomllib
     import urllib.request
-    import json
-    
+
     packages_dir = "/home/dq/Code/freeside/packages"
     queries = []
     pkg_list = []
-    
+
     # Step 1: Scan local package manifests
     try:
         if os.path.exists(packages_dir):
@@ -111,30 +112,30 @@ def query_security_feeds() -> dict:
         headers={"Content-Type": "application/json"},
         method="POST"
     )
-    
+
     cves_found = []
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             res_data = json.loads(resp.read().decode("utf-8"))
             results = res_data.get("results", [])
-            
+
             for i, res in enumerate(results):
                 vulns = res.get("vulns", [])
                 if not vulns:
                     continue
-                    
+
                 pkg_name = pkg_list[i]
                 # Fetch details for the first vulnerability
                 vuln = vulns[0]
                 vuln_id = vuln.get("id")
-                
+
                 # Fetch details from OSV vuln endpoint
                 detail_url = f"https://api.osv.dev/v1/vulns/{vuln_id}"
                 detail_req = urllib.request.Request(detail_url, method="GET")
                 try:
                     with urllib.request.urlopen(detail_req, timeout=5) as d_resp:
                         d_data = json.loads(d_resp.read().decode("utf-8"))
-                        
+
                         # Find cve_id from aliases
                         cve_id = vuln_id
                         aliases = d_data.get("aliases", [])
@@ -142,7 +143,7 @@ def query_security_feeds() -> dict:
                             if alias.startswith("CVE-"):
                                 cve_id = alias
                                 break
-                                
+
                         # Find fixed version
                         fixed_version = None
                         affected_list = d_data.get("affected", [])
@@ -156,10 +157,10 @@ def query_security_feeds() -> dict:
                                         if "fixed" in ev:
                                             fixed_version = ev["fixed"]
                                             break
-                        
+
                         if not fixed_version:
                             continue
-                            
+
                         # Parse severity
                         severity = "HIGH"
                         severities = d_data.get("severity", [])
@@ -169,7 +170,7 @@ def query_security_feeds() -> dict:
                                 severity = "CRITICAL"
                             elif "PR:H" in score_str:
                                 severity = "MODERATE"
-                        
+
                         cves_found.append({
                             "package": pkg_name,
                             "cve_id": cve_id,

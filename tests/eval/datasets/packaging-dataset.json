@@ -1,0 +1,25 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "import_zlib",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Import package zlib"}]
+      }
+    },
+    {
+      "eval_case_id": "upgrade_openssl",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Upgrade package openssl to version 3.3.1"}]
+      }
+    },
+    {
+      "eval_case_id": "scaffold_fallback",
+      "prompt": {
+        "role": "user",
+        "parts": [{"text": "Import package custom-helper-lib"}]
+      }
+    }
+  ]
+}

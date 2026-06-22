@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import subprocess
 import glob
+import os
+import re
+import subprocess
+
 
 def verify_package(pkg_name: str) -> dict:
     """Verifies the package recipe and manifest validity.
@@ -84,16 +86,41 @@ def read_build_logs(pkg_name: str) -> dict:
     log_files = glob.glob(log_pattern)
     if not log_files:
         return {"status": "error", "message": f"No build logs found for package {pkg_name}."}
-    
+
     log_files.sort(key=os.path.getmtime, reverse=True)
     latest_log = log_files[0]
     try:
-        with open(latest_log, "r", encoding="utf-8") as f:
+        with open(latest_log, encoding="utf-8") as f:
             content = f.read()
+        filtered_content = parse_compiler_errors(content)
         return {
             "status": "success",
             "file": os.path.basename(latest_log),
-            "content": content
+            "content": filtered_content
         }
     except Exception as e:
         return {"status": "error", "message": f"Failed to read log file {latest_log}: {e}"}
+
+def parse_compiler_errors(log_content: str) -> str:
+    """Extracts lines containing compiler or linker errors from the build log content."""
+    lines = log_content.splitlines()
+    error_patterns = [
+        r"(?i)\berror\b",
+        r"(?i)fatal error",
+        r"(?i)undefined reference",
+        r"(?i)ld returned",
+        r"(?i)cannot find -l",
+        r"(?i)collect2:"
+    ]
+    matched_lines = []
+    for i, line in enumerate(lines):
+        for pattern in error_patterns:
+            if re.search(pattern, line):
+                matched_lines.append(f"Line {i+1}: {line}")
+                break
+    if not matched_lines:
+        # If no explicit errors are found, return the last 100 lines as a fallback
+        fallback_lines = lines[-100:]
+        return "No specific error patterns matched. Showing last 100 lines of log:\n" + "\n".join(fallback_lines)
+    return "\n".join(matched_lines)
+

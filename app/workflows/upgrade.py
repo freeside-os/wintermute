@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncGenerator
-from pydantic import ConfigDict
+from collections.abc import AsyncGenerator
 
-from google.adk.agents import BaseAgent, Agent
+from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
+from pydantic import ConfigDict
 
 
 class UpgradeWorkflow(BaseAgent):
@@ -41,7 +41,7 @@ class UpgradeWorkflow(BaseAgent):
             user_msg = ""
             if last_event.author == "user" and last_event.content and last_event.content.parts:
                 user_msg = last_event.content.parts[0].text.lower()
-                
+
             if "yes" in user_msg or "approve" in user_msg:
                 state["pending_approval"] = False
                 state["approved"] = True

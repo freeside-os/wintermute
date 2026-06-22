@@ -15,7 +15,6 @@
 import os
 import re
 import tomllib
-from typing import Optional
 
 
 class DependencyGraph:
@@ -46,11 +45,11 @@ class DependencyGraph:
                 try:
                     with open(manifest_path, "rb") as f:
                         data = tomllib.load(f)
-                    
+
                     pkg_block = data.get("package", {})
                     name = pkg_block.get("name") or item
                     version = pkg_block.get("version", "")
-                    
+
                     # Extract dependencies
                     deps = set()
                     # 1. Package block dependencies
@@ -64,7 +63,7 @@ class DependencyGraph:
                     build_env = build_block.get("environment", {})
                     if isinstance(build_env.get("dependencies"), list):
                         deps.update(build_env["dependencies"])
-                    
+
                     deps_list = sorted(list(deps))
                     self.nodes[name] = {
                         "version": version,
@@ -254,7 +253,7 @@ def build_dependency_tree(pkg_name: str, workspace_root: str = "/home/dq/Code/fr
         if node in visited:
             return {"package": node, "dependencies": [], "cycle": True}
         visited.add(node)
-        
+
         deps = graph.get_dependencies(node)
         dep_trees = []
         for dep in deps:
@@ -262,7 +261,7 @@ def build_dependency_tree(pkg_name: str, workspace_root: str = "/home/dq/Code/fr
                 dep_trees.append(walk(dep))
             else:
                 dep_trees.append({"package": dep, "dependencies": [], "external": True})
-        
+
         visited.remove(node)
         return {
             "package": node,

@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncGenerator
-from pydantic import ConfigDict
+from collections.abc import AsyncGenerator
 
-from google.adk.agents import BaseAgent, Agent
+from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
+from pydantic import ConfigDict
 
 
 class SecurityWorkflow(BaseAgent):
@@ -40,7 +40,7 @@ class SecurityWorkflow(BaseAgent):
             )
         )
 
-        from app.tools import query_security_feeds, list_workspace_packages
+        from app.tools import list_workspace_packages, query_security_feeds
         feeds_res = query_security_feeds()
         cves = feeds_res.get("cves", [])
 
@@ -103,7 +103,7 @@ class SecurityWorkflow(BaseAgent):
             state["pkg_name"] = pkg
             state["version"] = fixed_version
             state["is_security_update"] = True
-            
+
             # Reset workflow execution flags for this package upgrade run
             state["upgrade_done"] = False
             state["refiner_done"] = False
@@ -122,7 +122,7 @@ class SecurityWorkflow(BaseAgent):
             try:
                 async for event in upgrade_wf.run_async(ctx):
                     yield event
-                
+
                 # Check if build completed successfully
                 if state.get("builder_done") and not state.get("pending_approval"):
                     build_succeeded = True
@@ -163,9 +163,9 @@ class SecurityWorkflow(BaseAgent):
 
     def send_notification(self, pkg: str, cve_id: str, version: str, status: str):
         """Sends a structured notification alert to a webhook (Slack/Discord/Google Chat) if configured."""
+        import json
         import os
         import urllib.request
-        import json
 
         webhook_url = os.environ.get("NOTIFICATION_WEBHOOK_URL")
         if not webhook_url:
@@ -181,7 +181,7 @@ class SecurityWorkflow(BaseAgent):
             f"• **Target Version**: `{version}`\n"
             f"• **Status**: {status_emoji} `{status}`"
         )
-        
+
         payload = {"text": message}
         try:
             req = urllib.request.Request(
