@@ -1,4 +1,3 @@
-# ruff: noqa
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,7 +21,7 @@ from pydantic import ConfigDict
 import google.auth
 from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
-from google.adk.events import Event, EventActions
+from google.adk.events import Event
 from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
@@ -84,14 +83,14 @@ from app.tools import (
 triage_agent = Agent(
     name="triage_agent",
     model=Gemini(
-        model="gemini-3-flash-preview",
+        model="gemini-3.5-flash",
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction=(
         "You are the Importer/Triage Agent for Freeside OS.\n"
         "Analyze the user request and query security/package feeds to determine package classification and action.\n"
         "First, identify the target package name (or set to 'all' if the request is to review all packages).\n"
-        "Determine if the request is a new package 'import', a version 'upgrade', or a 'review' of package quality/guidelines.\n"
+        "Determine if the request is a new package 'import', a version 'upgrade', a 'review' of package quality/guidelines, or a 'security_audit'.\n"
         "Use `query_security_feeds` to check if there are high-severity CVEs for the package. "
         "If a high-severity CVE is found and the version is upgraded, classify the package upgrade as a security update (set is_security_update to true).\n"
         "Classify the package into the correct group: base, builder, system, server, or desktop.\n"
@@ -99,7 +98,7 @@ triage_agent = Agent(
         "Provide your output in a clean JSON block in your response matching:\n"
         "{\n"
         '  "pkg_name": "package-name" or "all",\n'
-        '  "action": "import" or "upgrade" or "review",\n'
+        '  "action": "import" or "upgrade" or "review" or "security_audit",\n'
         '  "version": "version-string" or null,\n'
         '  "group": "group-name" or null,\n'
         '  "is_security_update": true or false\n'
@@ -115,7 +114,7 @@ triage_agent = Agent(
 refiner_agent = Agent(
     name="refiner_agent",
     model=Gemini(
-        model="gemini-3-flash-preview",
+        model="gemini-3.5-flash",
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction=(
@@ -143,7 +142,7 @@ refiner_agent = Agent(
 builder_agent = Agent(
     name="builder_agent",
     model=Gemini(
-        model="gemini-3-flash-preview",
+        model="models/gemini-3.1-pro-preview",
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction=(
@@ -180,38 +179,17 @@ class Workflow(BaseAgent):
     ) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
         
-        # Check if we are waiting for operator approval
+        # Check if we are waiting for operator approval ( UpgradeWorkflow handles approval )
         if state.get("pending_approval"):
-            # Get the operator's decision from the latest user message
-            last_event = ctx.session.events[-1]
-            user_msg = ""
-            if last_event.author == "user" and last_event.content and last_event.content.parts:
-                user_msg = last_event.content.parts[0].text.lower()
-                
-            if "yes" in user_msg or "approve" in user_msg:
-                pkg_name = state.get("pkg_name")
-                version = state.get("version")
-                state["pending_approval"] = False
-                state["approved"] = True
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Operator approved! Promoting package {pkg_name} version {version} to base/system distribution channels. Workflow complete. ✓")]
-                    )
-                )
-                return
-            else:
-                pkg_name = state.get("pkg_name")
-                state["pending_approval"] = False
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Upgrade aborted by operator. Package {pkg_name} was not promoted.")]
-                    )
-                )
-                return
+            from app.workflows.upgrade import UpgradeWorkflow
+            wf = UpgradeWorkflow(
+                name="upgrade_router",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
+            )
+            async for event in wf.run_async(ctx):
+                yield event
+            return
         
         # Step 1: Run Triage Agent if not already done
         if not state.get("triage_done"):
@@ -264,7 +242,10 @@ class Workflow(BaseAgent):
                     if ev.author == "user" and ev.content and ev.content.parts:
                         user_query = ev.content.parts[0].text
                         break
-                if "review" in user_query.lower() or "check" in user_query.lower() or "enforce" in user_query.lower():
+                if "security" in user_query.lower() or "cve" in user_query.lower():
+                    action = "security_audit"
+                    pkg_name = "all"
+                elif "review" in user_query.lower() or "check" in user_query.lower() or "enforce" in user_query.lower():
                     action = "review"
                     if "all" in user_query.lower():
                         pkg_name = "all"
@@ -282,6 +263,10 @@ class Workflow(BaseAgent):
                         if ver_match:
                             version = ver_match.group(1)
             
+            if not action and ("security" in triage_text.lower() or "cve" in triage_text.lower()):
+                action = "security_audit"
+                pkg_name = "all"
+
             state["pkg_name"] = pkg_name
             state["action"] = action
             state["version"] = version
@@ -306,237 +291,39 @@ class Workflow(BaseAgent):
             
         pkg_name = state.get("pkg_name")
         action = state.get("action", "import")
-        version = state.get("version")
-        is_security_update = state.get("is_security_update", False)
-        group = state.get("group", "extra")
         
-        if not pkg_name:
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text="Error: Could not determine target package name. Workflow aborted.")]
-                )
+        # Route to appropriate workflow subclass
+        if action == "security_audit":
+            from app.workflows.security import SecurityWorkflow
+            workflow = SecurityWorkflow(
+                name="security_workflow",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
             )
-            return
-
-        # Step 2: Perform the review workflow if requested
-        if action == "review":
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text=f"Starting package review and compliance enforcement for '{pkg_name}'...")]
-                )
+        elif action == "review":
+            from app.workflows.review import ReviewWorkflow
+            workflow = ReviewWorkflow(
+                name="review_workflow",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
             )
-            
-            # Resolve packages list
-            from app.tools import list_workspace_packages
-            list_res = list_workspace_packages()
-            all_pkgs = set(list_res.get("packages", []))
-            
-            if pkg_name == "all":
-                pkgs_to_review = list(all_pkgs)
-            else:
-                pkgs_to_review = [pkg_name]
-                
-            reject_reports = []
-            pass_reports = []
-            
-            for pkg in pkgs_to_review:
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Reviewing package [{pkg}]...")]
-                    )
-                )
-                
-                # Check for critical dependency mismatch
-                from app.tools import read_package_file
-                manifest_res = read_package_file(pkg, "package.manifest")
-                if manifest_res.get("status") == "error":
-                    reject_reports.append(f"Package [{pkg}]: Critical - package.manifest is missing or unreadable.")
-                    continue
-                    
-                import tomllib
-                try:
-                    manifest_data = tomllib.loads(manifest_res.get("content", ""))
-                    pkg_block = manifest_data.get("package", {})
-                    build_block = manifest_data.get("build", {})
-                    
-                    deps = pkg_block.get("dependencies", []) + build_block.get("dependencies", [])
-                    missing_deps = [d for d in deps if d not in all_pkgs]
-                    
-                    if missing_deps:
-                        reject_reports.append(f"Package [{pkg}]: REJECTED - Lists dependencies that do not exist in the workspace: {', '.join(missing_deps)}")
-                        continue
-                except Exception as e:
-                    reject_reports.append(f"Package [{pkg}]: Critical - Failed to parse package.manifest: {e}")
-                    continue
-                
-                # Check for minor issues
-                readme_res = read_package_file(pkg, "README.md")
-                has_readme = readme_res.get("status") == "success"
-                
-                from app.tools import verify_package
-                verify_res = verify_package(pkg)
-                is_valid = verify_res.get("status") == "success"
-                
-                minor_issues = []
-                if not has_readme:
-                    minor_issues.append("Missing README.md")
-                if not is_valid:
-                    minor_issues.append("Validation errors in manifest/justfile")
-                    
-                if minor_issues:
-                    yield Event(
-                        author=self.name,
-                        content=types.Content(
-                            role="model",
-                            parts=[types.Part(text=f"Package [{pkg}]: Minor issues found: {', '.join(minor_issues)}. Activating Recipe Refiner Agent to enforce guidance...")]
-                        )
-                    )
-                    # Let refiner agent fix the files.
-                    state["pkg_name"] = pkg
-                    async for event in self.refiner_agent.run_async(ctx):
-                        yield event
-                
-                # Check if it builds
-                from app.tools import build_package
-                build_res = build_package(pkg)
-                if build_res.get("status") == "error":
-                    yield Event(
-                        author=self.name,
-                        content=types.Content(
-                            role="model",
-                            parts=[types.Part(text=f"Package [{pkg}]: Sandbox build failed. Activating Build & Fixer Agent to diagnose and apply patches...")]
-                        )
-                    )
-                    state["pkg_name"] = pkg
-                    async for event in self.builder_agent.run_async(ctx):
-                        yield event
-                        
-                    # Re-verify build
-                    build_res = build_package(pkg)
-                    if build_res.get("status") == "error":
-                        reject_reports.append(f"Package [{pkg}]: REJECTED - Sandbox build compilation failed and could not be auto-patched.")
-                        continue
-                
-                pass_reports.append(f"Package [{pkg}]: PASSED (Enforced successfully with all minor auto-fixes applied)")
-                
-            # Final output for CI
-            report_lines = []
-            if reject_reports:
-                report_lines.append("### CI Status: REJECT")
-                for rep in reject_reports:
-                    report_lines.append(f"- ✗ {rep}")
-            else:
-                report_lines.append("### CI Status: PASS")
-                
-            if pass_reports:
-                report_lines.append("\n### Passed Packages:")
-                for rep in pass_reports:
-                    report_lines.append(f"- ✓ {rep}")
-                    
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text="\n".join(report_lines))]
-                )
-            )
-            return
-
-        # Step 3: Perform the package acquisition (Import or Upgrade)
-        if action == "upgrade":
-            if not state.get("upgrade_done"):
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Running package version upgrade to {version}...")]
-                    )
-                )
-                from app.tools import upgrade_package_version
-                res = upgrade_package_version(pkg_name, version)
-                state["upgrade_result"] = res
-                state["upgrade_done"] = True
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Upgrade tool result: {res}")]
-                    )
-                )
-        else:
-            if not state.get("import_done"):
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Importing package {pkg_name} PKGBUILD from Arch Linux...")]
-                    )
-                )
-                from app.tools import import_pkgbuild
-                res = import_pkgbuild(pkg_name)
-                state["import_result"] = res
-                state["import_done"] = True
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Import tool result: {res}")]
-                    )
-                )
-
-        # Step 4: Run Recipe Refiner Agent
-        if not state.get("refiner_done"):
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text="Activating Recipe Refiner Agent to check and adapt manifest & justfile...")]
-                )
-            )
-            async for event in self.refiner_agent.run_async(ctx):
-                yield event
-            state["refiner_done"] = True
-
-        # Step 5: Run Build & Fixer Agent
-        if not state.get("builder_done"):
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text="Activating Build & Fixer Agent to compile package inside sandbox...")]
-                )
-            )
-            async for event in self.builder_agent.run_async(ctx):
-                yield event
-            state["builder_done"] = True
-
-        # Step 6: Operator approval or autonomous promotion
-        if action == "upgrade" and not is_security_update:
-            state["pending_approval"] = True
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text=
-                        f"The package '{pkg_name}' has been successfully upgraded to version {version} and successfully compiled/verified in the container sandbox.\n"
-                        f"Operator confirmation required for promotion. Do you approve promoting this package? (Reply with 'yes' or 'no')"
-                    )]
-                )
+        elif action == "upgrade":
+            from app.workflows.upgrade import UpgradeWorkflow
+            workflow = UpgradeWorkflow(
+                name="upgrade_workflow",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
             )
         else:
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text=f"Promotion successful! Package {pkg_name} is fully verified and promoted autonomously. Workflow complete. ✓")]
-                )
+            from app.workflows.import_pkg import ImportWorkflow
+            workflow = ImportWorkflow(
+                name="import_workflow",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
             )
+            
+        async for event in workflow.run_async(ctx):
+            yield event
 
 # Instantiate root Workflow coordinator agent
 root_agent = Workflow(

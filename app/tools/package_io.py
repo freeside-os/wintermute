@@ -13,118 +13,9 @@
 # limitations under the License.
 
 import os
-import subprocess
-import glob
 import re
 import urllib.request
 import hashlib
-
-def import_pkgbuild(pkg_name: str) -> dict:
-    """Converts an Arch Linux PKGBUILD to Freeside format.
-
-    Args:
-        pkg_name: The name of the package on Arch GitLab to convert.
-
-    Returns:
-        A dictionary containing the status of the command and its output.
-    """
-    packages_dir = "/home/dq/Code/freeside/packages"
-    try:
-        res = subprocess.run(
-            ["python3", "fspack.py", "convert", pkg_name],
-            cwd=packages_dir,
-            capture_output=True,
-            text=True
-        )
-        return {
-            "status": "success" if res.returncode == 0 else "error",
-            "stdout": res.stdout,
-            "stderr": res.stderr
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def verify_package(pkg_name: str) -> dict:
-    """Verifies the package recipe and manifest validity.
-
-    Args:
-        pkg_name: Name of the package to verify.
-
-    Returns:
-        A dictionary containing the verification status and output.
-    """
-    packages_dir = "/home/dq/Code/freeside/packages"
-    try:
-        res = subprocess.run(
-            ["python3", "fspack.py", "verify", pkg_name],
-            cwd=packages_dir,
-            capture_output=True,
-            text=True
-        )
-        return {
-            "status": "success" if res.returncode == 0 else "error",
-            "stdout": res.stdout,
-            "stderr": res.stderr
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def build_package(pkg_name: str) -> dict:
-    """Builds a package inside the systemd-nspawn sandboxed container core.
-
-    Args:
-        pkg_name: Name of the package to build.
-
-    Returns:
-        A dictionary containing the build status, stdout, and stderr.
-    """
-    env = os.environ.copy()
-    env["STRAYLIGHT_PACKAGES_ROOT"] = "/home/dq/Code/freeside/packages"
-    env["STRAYLIGHT_BUILDER_ROOT"] = "/home/dq/Code/freeside/build"
-    env["STRAYLIGHT_BUILDER_OUTPUT_ROOT"] = "/home/dq/Code/freeside/build/packages"
-    try:
-        res = subprocess.run(
-            ["sudo", "-E", "/home/dq/Code/freeside/build/straylight", "build", "--pkg", pkg_name],
-            cwd="/home/dq/Code/freeside",
-            env=env,
-            capture_output=True,
-            text=True
-        )
-        return {
-            "status": "success" if res.returncode == 0 else "error",
-            "stdout": res.stdout,
-            "stderr": res.stderr
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def read_build_logs(pkg_name: str) -> dict:
-    """Reads stdout and stderr log from the most recent compile attempt of a package.
-
-    Args:
-        pkg_name: Name of the package to read logs for.
-
-    Returns:
-        A dictionary with the status, log file name, and log content.
-    """
-    log_dir = "/home/dq/Code/freeside/build"
-    log_pattern = os.path.join(log_dir, f"{pkg_name}-*.log")
-    log_files = glob.glob(log_pattern)
-    if not log_files:
-        return {"status": "error", "message": f"No build logs found for package {pkg_name}."}
-    
-    log_files.sort(key=os.path.getmtime, reverse=True)
-    latest_log = log_files[0]
-    try:
-        with open(latest_log, "r", encoding="utf-8") as f:
-            content = f.read()
-        return {
-            "status": "success",
-            "file": os.path.basename(latest_log),
-            "content": content
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to read log file {latest_log}: {e}"}
 
 def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
     """Generates and writes a patch file to packages/<pkg_name>/patches/ and registers it in package.justfile.
@@ -193,46 +84,6 @@ def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-def list_workspace_packages() -> dict:
-    """Lists all existing packages in the packages directory.
-
-    Returns:
-        A dictionary containing a list of package names.
-    """
-    packages_dir = "/home/dq/Code/freeside/packages"
-    try:
-        items = os.listdir(packages_dir)
-        pkgs = []
-        for item in items:
-            manifest_path = os.path.join(packages_dir, item, "package.manifest")
-            if os.path.isfile(manifest_path):
-                pkgs.append(item)
-        return {"status": "success", "packages": sorted(pkgs)}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def list_packages() -> dict:
-    """Lists all existing packages in the packages directory.
-
-    Returns:
-        A dictionary containing a list of package names.
-    """
-    return list_workspace_packages()
-
-def query_security_feeds() -> dict:
-    """Queries security feeds for mock CVE updates.
-
-    Returns:
-        A dictionary containing mock CVE update entries.
-    """
-    return {
-        "status": "success",
-        "cves": [
-            {"package": "zlib", "cve_id": "CVE-2026-9999", "severity": "HIGH", "fixed_version": "1.3.1.1"},
-            {"package": "openssl", "cve_id": "CVE-2026-8888", "severity": "CRITICAL", "fixed_version": "3.3.1"}
-        ]
-    }
 
 def upgrade_package_version(pkg_name: str, new_version: str) -> dict:
     """Bumps package version, updates URLs, downloads new sources to compute SHA256 checksums, and updates package.manifest.
