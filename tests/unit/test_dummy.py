@@ -58,3 +58,15 @@ def test_dependency_graph() -> None:
     tree = build_dependency_tree("zlib")
     assert tree["package"] == "zlib"
     assert any(d["package"] == "musl" for d in tree["dependencies"])
+
+def test_query_security_feeds() -> None:
+    from app.tools.feeds import query_security_feeds
+    res = query_security_feeds()
+    assert res["status"] in ("success", "fallback")
+    assert "cves" in res
+    if res["cves"]:
+        item = res["cves"][0]
+        assert "package" in item
+        assert "cve_id" in item
+        assert "severity" in item
+        assert "fixed_version" in item

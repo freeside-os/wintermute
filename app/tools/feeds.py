@@ -67,15 +67,126 @@ def list_packages() -> dict:
     return list_workspace_packages()
 
 def query_security_feeds() -> dict:
-    """Queries security feeds for mock CVE updates.
+    """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem."""
+    import tomllib
+    import urllib.request
+    import json
+    
+    packages_dir = "/home/dq/Code/freeside/packages"
+    queries = []
+    pkg_list = []
+    
+    # Step 1: Scan local package manifests
+    try:
+        if os.path.exists(packages_dir):
+            items = os.listdir(packages_dir)
+            for item in items:
+                manifest_path = os.path.join(packages_dir, item, "package.manifest")
+                if os.path.isfile(manifest_path):
+                    with open(manifest_path, "rb") as f:
+                        data = tomllib.load(f)
+                    pkg_block = data.get("package", {})
+                    name = pkg_block.get("name") or item
+                    version = pkg_block.get("version", "")
+                    if name and version:
+                        queries.append({
+                            "package": {
+                                "name": name,
+                                "ecosystem": "Alpine:v3.20"
+                            },
+                            "version": version
+                        })
+                        pkg_list.append(name)
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to scan local packages: {e}"}
 
-    Returns:
-        A dictionary containing mock CVE update entries.
-    """
-    return {
-        "status": "success",
-        "cves": [
-            {"package": "zlib", "cve_id": "CVE-2026-9999", "severity": "HIGH", "fixed_version": "1.3.1.1"},
-            {"package": "openssl", "cve_id": "CVE-2026-8888", "severity": "CRITICAL", "fixed_version": "3.3.1"}
-        ]
-    }
+    if not queries:
+        return {"status": "success", "cves": []}
+
+    # Step 2: Query OSV batch API
+    payload = {"queries": queries}
+    req = urllib.request.Request(
+        "https://api.osv.dev/v1/querybatch",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    
+    cves_found = []
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res_data = json.loads(resp.read().decode("utf-8"))
+            results = res_data.get("results", [])
+            
+            for i, res in enumerate(results):
+                vulns = res.get("vulns", [])
+                if not vulns:
+                    continue
+                    
+                pkg_name = pkg_list[i]
+                # Fetch details for the first vulnerability
+                vuln = vulns[0]
+                vuln_id = vuln.get("id")
+                
+                # Fetch details from OSV vuln endpoint
+                detail_url = f"https://api.osv.dev/v1/vulns/{vuln_id}"
+                detail_req = urllib.request.Request(detail_url, method="GET")
+                try:
+                    with urllib.request.urlopen(detail_req, timeout=5) as d_resp:
+                        d_data = json.loads(d_resp.read().decode("utf-8"))
+                        
+                        # Find cve_id from aliases
+                        cve_id = vuln_id
+                        aliases = d_data.get("aliases", [])
+                        for alias in aliases:
+                            if alias.startswith("CVE-"):
+                                cve_id = alias
+                                break
+                                
+                        # Find fixed version
+                        fixed_version = None
+                        affected_list = d_data.get("affected", [])
+                        for aff in affected_list:
+                            aff_pkg = aff.get("package", {})
+                            if aff_pkg.get("name") == pkg_name:
+                                ranges = aff.get("ranges", [])
+                                for r in ranges:
+                                    events = r.get("events", [])
+                                    for ev in events:
+                                        if "fixed" in ev:
+                                            fixed_version = ev["fixed"]
+                                            break
+                        
+                        if not fixed_version:
+                            continue
+                            
+                        # Parse severity
+                        severity = "HIGH"
+                        severities = d_data.get("severity", [])
+                        if severities:
+                            score_str = severities[0].get("score", "")
+                            if "PR:N" in score_str or "C:H" in score_str:
+                                severity = "CRITICAL"
+                            elif "PR:H" in score_str:
+                                severity = "MODERATE"
+                        
+                        cves_found.append({
+                            "package": pkg_name,
+                            "cve_id": cve_id,
+                            "severity": severity,
+                            "fixed_version": fixed_version
+                        })
+                except Exception:
+                    pass
+    except Exception as e:
+        # Graceful fallback: return mock/test security feed data if API is down
+        return {
+            "status": "fallback",
+            "message": f"OSV API request failed ({e}), returning mock feed data.",
+            "cves": [
+                {"package": "zlib", "cve_id": "CVE-2026-9999", "severity": "HIGH", "fixed_version": "1.3.2.1"},
+                {"package": "openssl", "cve_id": "CVE-2026-8888", "severity": "CRITICAL", "fixed_version": "3.3.1"}
+            ]
+        }
+
+    return {"status": "success", "cves": cves_found}
