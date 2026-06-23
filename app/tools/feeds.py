@@ -68,10 +68,26 @@ def list_packages() -> dict:
     return list_workspace_packages()
 
 def query_security_feeds() -> dict:
-    """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem."""
+    """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem, using a local cache."""
     import json
+    import time
     import tomllib
     import urllib.request
+
+    cache_dir = os.path.expanduser("~/.cache/wintermute")
+    cache_file = os.path.join(cache_dir, "security_feeds_cache.json")
+
+    # Check if cache is valid (less than 8 hours old)
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r") as f:
+                cached = json.load(f)
+            if time.time() - cached.get("timestamp", 0) < 28800:
+                res = cached.get("data")
+                if res and res.get("status") in ("success", "fallback"):
+                    return res
+        except Exception:
+            pass
 
     packages_dir = "/home/dq/Code/freeside/packages"
     queries = []
@@ -102,7 +118,14 @@ def query_security_feeds() -> dict:
         return {"status": "error", "message": f"Failed to scan local packages: {e}"}
 
     if not queries:
-        return {"status": "success", "cves": []}
+        empty_res = {"status": "success", "cves": []}
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(cache_file, "w") as f:
+                json.dump({"timestamp": time.time(), "data": empty_res}, f)
+        except Exception:
+            pass
+        return empty_res
 
     # Step 2: Query OSV batch API
     payload = {"queries": queries}
@@ -181,7 +204,7 @@ def query_security_feeds() -> dict:
                     pass
     except Exception as e:
         # Graceful fallback: return mock/test security feed data if API is down
-        return {
+        fallback_res = {
             "status": "fallback",
             "message": f"OSV API request failed ({e}), returning mock feed data.",
             "cves": [
@@ -189,5 +212,20 @@ def query_security_feeds() -> dict:
                 {"package": "openssl", "cve_id": "CVE-2026-8888", "severity": "CRITICAL", "fixed_version": "3.3.1"}
             ]
         }
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(cache_file, "w") as f:
+                json.dump({"timestamp": time.time(), "data": fallback_res}, f)
+        except Exception:
+            pass
+        return fallback_res
 
-    return {"status": "success", "cves": cves_found}
+    result = {"status": "success", "cves": cves_found}
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_file, "w") as f:
+            json.dump({"timestamp": time.time(), "data": result}, f)
+    except Exception:
+        pass
+
+    return result

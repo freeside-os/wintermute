@@ -43,11 +43,12 @@ def verify_package(pkg_name: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def build_package(pkg_name: str) -> dict:
+def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
     """Builds a package inside the systemd-nspawn sandboxed container core.
 
     Args:
         pkg_name: Name of the package to build.
+        keep_sandbox: If True, preserves the build sandbox directory for subsequent incremental compilation.
 
     Returns:
         A dictionary containing the build status, stdout, and stderr.
@@ -57,8 +58,11 @@ def build_package(pkg_name: str) -> dict:
     env["STRAYLIGHT_BUILDER_ROOT"] = "/home/dq/Code/freeside/build"
     env["STRAYLIGHT_BUILDER_OUTPUT_ROOT"] = "/home/dq/Code/freeside/build/packages"
     try:
+        cmd = ["sudo", "-E", "/home/dq/Code/freeside/build/straylight", "build", "--pkg", pkg_name]
+        if keep_sandbox:
+            cmd.append("--keep-sandbox")
         res = subprocess.run(
-            ["sudo", "-E", "/home/dq/Code/freeside/build/straylight", "build", "--pkg", pkg_name],
+            cmd,
             cwd="/home/dq/Code/freeside",
             env=env,
             capture_output=True,
@@ -104,9 +108,13 @@ def read_build_logs(pkg_name: str) -> dict:
 def parse_compiler_errors(log_content: str) -> str:
     """Extracts lines containing compiler or linker errors from the build log content."""
     lines = log_content.splitlines()
+    if len(lines) <= 250:
+        return log_content
+
     error_patterns = [
         r"(?i)\berror\b",
         r"(?i)fatal error",
+        r"(?i)\bfailed\b",
         r"(?i)undefined reference",
         r"(?i)ld returned",
         r"(?i)cannot find -l",
@@ -116,7 +124,14 @@ def parse_compiler_errors(log_content: str) -> str:
     for i, line in enumerate(lines):
         for pattern in error_patterns:
             if re.search(pattern, line):
-                matched_lines.append(f"Line {i+1}: {line}")
+                # Grab context lines around the error for better diagnostics
+                start = max(0, i - 3)
+                end = min(len(lines), i + 4)
+                matched_lines.append(f"--- Context around Line {i+1} ---")
+                for j in range(start, end):
+                    prefix = ">> " if j == i else "   "
+                    matched_lines.append(f"{prefix}Line {j+1}: {lines[j]}")
+                matched_lines.append("")
                 break
     if not matched_lines:
         # If no explicit errors are found, return the last 100 lines as a fallback

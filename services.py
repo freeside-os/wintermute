@@ -12,18 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from app.workflows.create import CreateWorkflow
-from app.workflows.fix import FixWorkflow
-from app.workflows.import_pkg import ImportWorkflow
-from app.workflows.review import ReviewWorkflow
-from app.workflows.security import SecurityWorkflow
-from app.workflows.upgrade import UpgradeWorkflow
+from google.adk.cli.service_registry import get_service_registry
 
-__all__ = [
-    "CreateWorkflow",
-    "FixWorkflow",
-    "ImportWorkflow",
-    "ReviewWorkflow",
-    "SecurityWorkflow",
-    "UpgradeWorkflow",
-]
+from app.memory_service import PersistentGeminiMemoryService
+
+
+def gemini_memory_factory(uri: str, **kwargs):
+    """Factory to construct the PersistentGeminiMemoryService."""
+    # We can parse the path from URI if needed, but defaults to "./chroma_memory"
+    return PersistentGeminiMemoryService()
+
+
+# Register custom memory service under scheme "geminimemory"
+get_service_registry().register_memory_service("geminimemory", gemini_memory_factory)

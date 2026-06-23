@@ -22,9 +22,13 @@ from app.app_utils.telemetry import setup_telemetry
 from app.app_utils.typing import Feedback
 
 setup_telemetry()
-_, project_id = google.auth.default()
-logging_client = google_cloud_logging.Client()
-logger = logging_client.logger(__name__)
+try:
+    _, project_id = google.auth.default()
+    logging_client = google_cloud_logging.Client()
+    logger = logging_client.logger(__name__)
+except Exception:
+    import logging
+    logger = logging.getLogger(__name__)
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
@@ -37,14 +41,16 @@ AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 session_service_uri = None
 
 artifact_service_uri = f"gs://{logs_bucket_name}" if logs_bucket_name else None
+memory_service_uri = "geminimemory://wintermute_packaging_knowledge"
 
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
     web=True,
     artifact_service_uri=artifact_service_uri,
+    memory_service_uri=memory_service_uri,
     allow_origins=allow_origins,
     session_service_uri=session_service_uri,
-    otel_to_cloud=True,
+    otel_to_cloud=not os.getenv("INTEGRATION_TEST") == "TRUE",
 )
 app.title = "wintermute"
 app.description = "API for interacting with the Agent wintermute"

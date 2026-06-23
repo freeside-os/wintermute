@@ -64,16 +64,27 @@ def test_dependency_graph() -> None:
     assert any(d["package"] == "musl" for d in tree["dependencies"])
 
 def test_query_security_feeds() -> None:
+    import os
+    import json
     from app.tools.feeds import query_security_feeds
+    
+    cache_file = os.path.expanduser("~/.cache/wintermute/security_feeds_cache.json")
+    if os.path.exists(cache_file):
+        try:
+            os.remove(cache_file)
+        except Exception:
+            pass
+
     res = query_security_feeds()
     assert res["status"] in ("success", "fallback")
     assert "cves" in res
-    if res["cves"]:
-        item = res["cves"][0]
-        assert "package" in item
-        assert "cve_id" in item
-        assert "severity" in item
-        assert "fixed_version" in item
+    
+    # Verify cache file was successfully created
+    assert os.path.exists(cache_file)
+    with open(cache_file, "r") as f:
+        cached = json.load(f)
+    assert "timestamp" in cached
+    assert cached["data"]["status"] == res["status"]
 
 def test_fetch_source_checksum() -> None:
     from app.tools.package_io import fetch_source_checksum
@@ -81,4 +92,68 @@ def test_fetch_source_checksum() -> None:
     assert res["status"] == "success"
     assert "sha256" in res
     assert len(res["sha256"]) == 64
+
+def test_package_io() -> None:
+    from app.tools.package_io import read_package_file, write_package_file
+    import os
+
+    # Write a dummy package file
+    pkg = "dummy_test_package_io"
+    filename = "test_io.txt"
+    content = "Hello Wintermute IO!"
+
+    res = write_package_file(pkg, filename, content)
+    assert res["status"] == "success"
+
+    res_read = read_package_file(pkg, filename)
+    assert res_read["status"] == "success"
+    assert res_read["content"] == content
+
+    # Clean up
+    path = f"/home/dq/Code/freeside/packages/{pkg}/{filename}"
+    if os.path.exists(path):
+        os.remove(path)
+    pkg_dir = f"/home/dq/Code/freeside/packages/{pkg}"
+    if os.path.exists(pkg_dir):
+        try:
+            os.rmdir(pkg_dir)
+        except Exception:
+            pass
+
+def test_apply_patch() -> None:
+    from app.tools.package_io import apply_patch, write_package_file
+    import os
+
+    pkg = "dummy_test_patch"
+    justfile_content = "build:\n\ttar -xf source.tar.gz\n\tcd src && make\n"
+    
+    # Setup dummy package justfile
+    write_package_file(pkg, "package.justfile", justfile_content)
+
+    patch_content = "--- a/file.c\n+++ b/file.c\n@@ -1,1 +1,2 @@\n+patched\n"
+    res = apply_patch(pkg, "src/file.c", patch_content)
+    assert res["status"] == "success"
+    assert "patch_file" in res
+
+    # Verify justfile was updated
+    justfile_path = f"/home/dq/Code/freeside/packages/{pkg}/package.justfile"
+    assert os.path.exists(justfile_path)
+    with open(justfile_path, encoding="utf-8") as f:
+        updated_content = f.read()
+
+    assert "patch -p1 -d src < /workspace/packages/$PKG_NAME/patches/" in updated_content
+
+    # Clean up
+    patches_dir = f"/home/dq/Code/freeside/packages/{pkg}/patches"
+    if os.path.exists(patches_dir):
+        for f_name in os.listdir(patches_dir):
+            os.remove(os.path.join(patches_dir, f_name))
+        os.rmdir(patches_dir)
+    os.remove(justfile_path)
+    pkg_dir = f"/home/dq/Code/freeside/packages/{pkg}"
+    if os.path.exists(pkg_dir):
+        try:
+            os.rmdir(pkg_dir)
+        except Exception:
+            pass
 

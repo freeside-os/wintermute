@@ -1,0 +1,107 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import shutil
+import pytest
+
+from app.memory_service import PersistentGeminiMemoryService
+from google.adk.events.event import Event
+from google.adk.memory.memory_entry import MemoryEntry
+from google.adk.sessions.session import Session
+from google.genai import types
+
+
+@pytest.mark.asyncio
+async def test_persistent_gemini_memory_service() -> None:
+    # Use a temporary directory for ChromaDB in testing
+    test_path = "./chroma_memory_test"
+    if os.path.exists(test_path):
+        shutil.rmtree(test_path)
+
+    try:
+        service = PersistentGeminiMemoryService(path=test_path)
+
+        # 1. Test add_session_to_memory
+        session = Session(
+            id="test-session-123",
+            app_name="test_app",
+            user_id="test_user",
+            state={},
+            events=[
+                Event(
+                    author="user",
+                    content=types.Content(
+                        role="user",
+                        parts=[types.Part(text="We are compiling zlib with musl.")],
+                    ),
+                ),
+                Event(
+                    author="builder_agent",
+                    content=types.Content(
+                        role="model",
+                        parts=[
+                            types.Part(
+                                text="Encountered undefined reference to inline function. Fixed by injecting fgnu89-inline CFLAGS."
+                            )
+                        ],
+                    ),
+                ),
+            ],
+            last_update_time=1234567.0,
+        )
+
+        await service.add_session_to_memory(session)
+
+        # 2. Test add_memory directly (simulating the summarizer agent's write)
+        direct_entry = MemoryEntry(
+            id="test-summary-456",
+            content=types.Content(
+                role="model",
+                parts=[types.Part(text="Summary: zlib compilation fails on musl inline functions. Fix: use CFLAGS fgnu89-inline.")],
+            ),
+            author="memory_summarizer_agent",
+            timestamp="2026-06-23T00:00:00",
+        )
+        
+        await service.add_memory(
+            app_name="test_app",
+            user_id="test_user",
+            memories=[direct_entry]
+        )
+
+        # 3. Test search_memory matching the summary
+        results = await service.search_memory(
+            query="zlib musl inline functions fix",
+            app_name="test_app",
+            user_id="test_user",
+        )
+
+        # Verify results
+        assert len(results) > 0
+        memories = results.memories if hasattr(results, "memories") else results
+        # We expect both the session and the summary to match
+        assert len(memories) >= 1
+        
+        # Ensure our direct summary is retrieved
+        summary_results = [m for m in memories if m.id == "test-summary-456"]
+        assert len(summary_results) == 1
+        assert "Summary: zlib compilation fails" in summary_results[0].content.parts[0].text
+        assert summary_results[0].custom_metadata["app_name"] == "test_app"
+        assert summary_results[0].custom_metadata["user_id"] == "test_user"
+
+    finally:
+        # Clean up testing directory
+        if os.path.exists(test_path):
+            shutil.rmtree(test_path)

@@ -35,6 +35,10 @@ from app.tools.package_io import (
     upgrade_package_version,
     write_package_file,
 )
+from app.tools.memory import (
+    save_session_to_memory,
+    search_memory,
+)
 
 __all__ = [
     "DependencyGraph",
@@ -49,6 +53,8 @@ __all__ = [
     "query_security_feeds",
     "read_build_logs",
     "read_package_file",
+    "save_session_to_memory",
+    "search_memory",
     "upgrade_package_version",
     "verify_package",
     "write_package_file",

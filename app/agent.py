@@ -62,7 +62,7 @@ elif has_vertex_creds:
 else:
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "False"
 
-from app.tools import (
+from app.tools import (  # noqa: E402
     apply_patch,
     build_package,
     fetch_source_checksum,
@@ -71,6 +71,8 @@ from app.tools import (
     query_security_feeds,
     read_build_logs,
     read_package_file,
+    save_session_to_memory,
+    search_memory,
     verify_package,
     write_package_file,
 )
@@ -88,7 +90,7 @@ triage_agent = Agent(
         "You are the Importer/Triage Agent for Freeside OS.\n"
         "Analyze the user request and query security/package feeds to determine package classification and action.\n"
         "First, identify the target package name (or set to 'all' if the request is to review all packages).\n"
-        "Determine if the request is a new package 'import', a version 'upgrade', a 'review' of package quality/guidelines, or a 'security_audit'.\n"
+        "Determine if the request is a new package 'import' (from Arch Linux), a new package 'create' (from scratch/scaffold), a package build 'fix', a version 'upgrade', a 'review' of package quality/guidelines, or a 'security_audit'.\n"
         "Use `query_security_feeds` to check if there are high-severity CVEs for the package. "
         "If a high-severity CVE is found and the version is upgraded, classify the package upgrade as a security update (set is_security_update to true).\n"
         "Classify the package into the correct group: base, builder, system, server, or desktop.\n"
@@ -96,13 +98,17 @@ triage_agent = Agent(
         "Provide your output in a clean JSON block in your response matching:\n"
         "{\n"
         '  "pkg_name": "package-name" or "all",\n'
-        '  "action": "import" or "upgrade" or "review" or "security_audit",\n'
+        '  "action": "import" or "create" or "fix" or "upgrade" or "review" or "security_audit",\n'
         '  "version": "version-string" or null,\n'
         '  "group": "group-name" or null,\n'
         '  "is_security_update": true or false\n'
-        "}"
+        "}\n\n"
+        "You have access to a long-term semantic memory store containing past Linux packaging sessions, build quirks, dependency workarounds, and resolution steps. \n\n"
+        "When analyzing a packaging request or troubleshooting a build failure:\n"
+        "1. Prioritize searching your memory if you encounter an error, specific compilation quirk, or unfamiliar toolchain behavior. Do not waste cycles re-discovering issues you have already solved.\n"
+        "2. When you successfully resolve a nuanced packaging issue, ensure the relevant quirks, errors, and final working configurations are saved clearly to your memory so you can recall them in future sessions."
     ),
-    tools=[list_workspace_packages, list_packages, query_security_feeds],
+    tools=[list_workspace_packages, list_packages, query_security_feeds, search_memory],
     output_key="triage_output"
 )
 
@@ -133,9 +139,13 @@ refiner_agent = Agent(
         "Verify if a corresponding extraction command (such as tar -xf, tar -Jxf, tar -zxf, or unzip) for any .tar.* or compressed sources is "
         "present in the package.justfile build target. Ensure that compile/configure commands run inside the correct extracted directory path "
         "(e.g. cd $PKG_NAME-* or cd $PKG_NAME-$PKG_VERSION). Use fetch_source_checksum to calculate SHA-256 checksums for any new or modified package source URLs.\n"
-        "After editing the files, print a confirmation message outlining what you changed."
+        "After editing the files, print a confirmation message outlining what you changed.\n\n"
+        "You have access to a long-term semantic memory store containing past Linux packaging sessions, build quirks, dependency workarounds, and resolution steps. \n\n"
+        "When analyzing a packaging request or troubleshooting a build failure:\n"
+        "1. Prioritize searching your memory if you encounter an error, specific compilation quirk, or unfamiliar toolchain behavior. Do not waste cycles re-discovering issues you have already solved.\n"
+        "2. When you successfully resolve a nuanced packaging issue, ensure the relevant quirks, errors, and final working configurations are saved clearly to your memory so you can recall them in future sessions."
     ),
-    tools=[read_package_file, write_package_file, fetch_source_checksum]
+    tools=[read_package_file, write_package_file, fetch_source_checksum, search_memory]
 )
 
 # ------------------------------------------------------------------------------
@@ -144,7 +154,7 @@ refiner_agent = Agent(
 builder_agent = Agent(
     name="builder_agent",
     model=Gemini(
-        model="models/gemini-3.1-pro-preview",
+        model="gemini-3.5-flash",
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction=(
@@ -152,7 +162,9 @@ builder_agent = Agent(
         "Your task is to run the sandbox compilation loop, inspect logs on failure, apply patches, and ensure validation passes.\n"
         "Steps:\n"
         "1. Run `verify_package` to check the package recipe's validity.\n"
-        "2. Run `build_package` to compile the package inside the sandboxed container container.\n"
+        "2. Run `build_package` to compile the package inside the sandboxed container.\n"
+        "   - During debugging and iterative fixing attempts, set `keep_sandbox=True` to speed up compilations using incremental builds.\n"
+        "   - Once the compilation succeeds and you are ready for final verification, run `build_package` with `keep_sandbox=False` (or omit it) to ensure a clean, reproducible build from scratch.\n"
         "3. If the build fails, run `read_build_logs` to get the filtered stderr compile output. Analyze the error. Use the following Musl & Toolchain troubleshooting lookup table to determine the fix:\n"
         "   - Redefinition of Inline Functions: If compilation fails due to redefinition of inline functions or inline symbols (e.g. legacy C code compiled on modern GCC), inject `CFLAGS=\"-g -O2 -fgnu89-inline\"` into the build configuration/environment.\n"
         "   - Missing `argp`: If compilation fails due to missing `argp` functions/headers, add `argp-standalone` to the manifest's build dependencies (`build_dependencies` or `build.dependencies`) and append `LIBS=\"-largp\"` or `LDFLAGS=\"-largp\"` to the compilation command/environment.\n"
@@ -163,9 +175,13 @@ builder_agent = Agent(
         "Under the '## Upgrade Notes' section, append any valuable extra information about this build run. "
         "For example, list any patches applied, specific compiler configurations required, or dependency resolution details "
         "that will be helpful for future updates. Write the updated README.md back using `write_package_file`.\n"
-        "Output a short build report when done."
+        "Output a short build report when done.\n\n"
+        "You have access to a long-term semantic memory store containing past Linux packaging sessions, build quirks, dependency workarounds, and resolution steps. \n\n"
+        "When analyzing a packaging request or troubleshooting a build failure:\n"
+        "1. Prioritize searching your memory if you encounter an error, specific compilation quirk, or unfamiliar toolchain behavior. Do not waste cycles re-discovering issues you have already solved.\n"
+        "2. When you successfully resolve a nuanced packaging issue, ensure the relevant quirks, errors, and final working configurations are saved clearly to your memory so you can recall them in future sessions."
     ),
-    tools=[build_package, verify_package, read_build_logs, apply_patch, read_package_file, write_package_file]
+    tools=[build_package, verify_package, read_build_logs, apply_patch, read_package_file, write_package_file, search_memory, save_session_to_memory]
 )
 
 # ------------------------------------------------------------------------------
@@ -236,7 +252,7 @@ class Workflow(BaseAgent):
                 pass
 
             if not pkg_name:
-                pkg_match = re.search(r"(?:package|import|upgrade)\s+([a-zA-Z0-9_\-]+)", triage_text, re.IGNORECASE)
+                pkg_match = re.search(r"(?:package|import|create|upgrade|fix)\s+([a-zA-Z0-9_\-]+)", triage_text, re.IGNORECASE)
                 if pkg_match:
                     pkg_name = pkg_match.group(1)
 
@@ -257,6 +273,16 @@ class Workflow(BaseAgent):
                         pkg_match = re.search(r"(?:review|check|validate|enforce)\s+(?:package\s+)?([a-zA-Z0-9_\-]+)", user_query, re.IGNORECASE)
                         if pkg_match:
                             pkg_name = pkg_match.group(1)
+                elif "create" in user_query.lower() or "scaffold" in user_query.lower() or "scratch" in user_query.lower():
+                    action = "create"
+                    pkg_match = re.search(r"(?:create|scaffold|scratch|new)\s+(?:package\s+)?([a-zA-Z0-9_\-]+)", user_query, re.IGNORECASE)
+                    if pkg_match:
+                        pkg_name = pkg_match.group(1)
+                elif "fix" in user_query.lower() or "patch" in user_query.lower() or "debug" in user_query.lower():
+                    action = "fix"
+                    pkg_match = re.search(r"(?:fix|patch|debug|repair)\s+(?:package\s+)?([a-zA-Z0-9_\-]+)", user_query, re.IGNORECASE)
+                    if pkg_match:
+                        pkg_name = pkg_match.group(1)
                 else:
                     pkg_match = re.search(r"(?:import|build|upgrade)\s+(?:package\s+)?([a-zA-Z0-9_\-]+)", user_query, re.IGNORECASE)
                     if pkg_match:
@@ -296,6 +322,16 @@ class Workflow(BaseAgent):
         pkg_name = state.get("pkg_name")
         action = state.get("action", "import")
 
+        if not pkg_name and action != "security_audit":
+            yield Event(
+                author=self.name,
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="No target package name identified. I am the Wintermute packaging agent, designed to create, import, fix, upgrade, review, or audit packages for Freeside OS. Please specify a package name to proceed.")]
+                )
+            )
+            return
+
         # Route to appropriate workflow subclass
         if action == "security_audit":
             from app.workflows.security import SecurityWorkflow
@@ -315,6 +351,20 @@ class Workflow(BaseAgent):
             from app.workflows.upgrade import UpgradeWorkflow
             workflow = UpgradeWorkflow(
                 name="upgrade_workflow",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
+            )
+        elif action == "create":
+            from app.workflows.create import CreateWorkflow
+            workflow = CreateWorkflow(
+                name="create_workflow",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
+            )
+        elif action == "fix":
+            from app.workflows.fix import FixWorkflow
+            workflow = FixWorkflow(
+                name="fix_workflow",
                 refiner_agent=self.refiner_agent,
                 builder_agent=self.builder_agent
             )

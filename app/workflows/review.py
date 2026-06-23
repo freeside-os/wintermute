@@ -125,13 +125,18 @@ class ReviewWorkflow(BaseAgent):
                     )
                 )
                 state["pkg_name"] = pkg
+                builder_reason = "No explanation provided by builder agent."
                 async for event in self.builder_agent.run_async(ctx):
                     yield event
+                    if event.author == self.builder_agent.name and event.content and event.content.parts:
+                        text_parts = [p.text for p in event.content.parts if getattr(p, "text", None)]
+                        if text_parts:
+                            builder_reason = " ".join(text_parts)
 
                 # Re-verify build
                 build_res = build_package(pkg)
                 if build_res.get("status") == "error":
-                    reject_reports.append(f"Package [{pkg}]: REJECTED - Sandbox build compilation failed and could not be auto-patched.")
+                    reject_reports.append(f"Package [{pkg}]: REJECTED - Sandbox build compilation failed.\nReason: {builder_reason}")
                     continue
 
             pass_reports.append(f"Package [{pkg}]: PASSED (Enforced successfully with all minor auto-fixes applied)")
