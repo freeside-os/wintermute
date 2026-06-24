@@ -28,6 +28,7 @@ def test_workflow_initialization() -> None:
 
     create_wf = CreateWorkflow(
         name="test_create",
+        scaffold_agent=refiner,
         refiner_agent=refiner,
         builder_agent=builder
     )
