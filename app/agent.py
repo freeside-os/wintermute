@@ -23,8 +23,11 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.apps import App
 from google.adk.events import Event
 from google.adk.models import Gemini
+from google.adk.tools import google_search
 from google.genai import types
 from pydantic import ConfigDict
+
+from . import services
 
 # Try to find and load .env manually to avoid dependency issues
 for env_path in [".env", "../.env", "../../.env", "app/.env"]:
@@ -93,7 +96,7 @@ triage_agent = Agent(
         "Determine if the request is a new package 'import' (from Arch Linux), a new package 'create' (from scratch/scaffold), a package build 'fix', a version 'upgrade', a 'review' of package quality/guidelines, or a 'security_audit'.\n"
         "Use `query_security_feeds` to check if there are high-severity CVEs for the package. "
         "If a high-severity CVE is found and the version is upgraded, classify the package upgrade as a security update (set is_security_update to true).\n"
-        "Classify the package into the correct group: base, builder, system, server, or desktop.\n"
+        "Classify the package into the correct group: base, builder, system, linux, server, desktop, or extra.\n"
         "Use list_workspace_packages if you need to check existing packages.\n"
         "Provide your output in a clean JSON block in your response matching:\n"
         "{\n"
@@ -184,6 +187,51 @@ builder_agent = Agent(
     tools=[build_package, verify_package, read_build_logs, apply_patch, read_package_file, write_package_file, search_memory, save_session_to_memory]
 )
 
+def fix_mixed_tools_callback(callback_context, llm_request):
+    if llm_request.config and llm_request.config.tools:
+        has_builtin = False
+        has_custom = False
+        for tool in llm_request.config.tools:
+            if getattr(tool, 'google_search', None) or getattr(tool, 'code_execution', None) or getattr(tool, 'google_search_retrieval', None) or getattr(tool, 'google_maps', None):
+                has_builtin = True
+            if getattr(tool, 'function_declarations', None):
+                has_custom = True
+        if has_builtin and has_custom:
+            if not llm_request.config.tool_config:
+                llm_request.config.tool_config = types.ToolConfig()
+            llm_request.config.tool_config.include_server_side_tool_invocations = True
+
+# ------------------------------------------------------------------------------
+# 3.5. Scaffolder Agent
+# ------------------------------------------------------------------------------
+scaffold_agent = Agent(
+    name="scaffolder",
+    model=Gemini(
+        model="gemini-3.5-flash",
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    instruction=(
+        "You are the Scaffolder Agent for Freeside OS.\n"
+        "Your task is to generate a package recipe from scratch.\n"
+        "Steps:\n"
+        "1. Use `google_search` to search the web for the package details, including its description, upstream source website/URL, and latest stable release archive URL (typically .tar.gz, .tar.xz, etc.).\n"
+        "2. Once you find a suitable release archive URL, use the `fetch_source_checksum` tool to download the package and calculate its SHA-256 checksum.\n"
+        "3. Generate a valid Freeside schema `package.manifest` and a basic `package.justfile` for the package, and write them using `write_package_file`.\n\n"
+        "Requirements for package.manifest:\n"
+        "- Must be in TOML format.\n"
+        "- Root keys: `[package]`, `[build]`, and `[build.environment]` if env variables are needed.\n"
+        "- Under `[package]`, include: `name` (must be the package name), `version`, `description`, and `group`.\n"
+        "- Under `[build]`, include: `sources` as an array of tables containing `url` and `hash = { algo = \"sha256\", value = \"...\" }`.\n\n"
+        "Requirements for package.justfile:\n"
+        "- Must be a valid justfile format with a `build:` target and a `package:` target.\n"
+        "- Under the `build:` target, extract the source archive (e.g. `tar -xf ...`), `cd` into the extracted folder (use a version-dynamic directory like `cd $PKG_NAME-*` or `cd $PKG_NAME-$PKG_VERSION`), run configure and make (or other build commands).\n"
+        "- Under the `package:` target, copy built files/binaries to `$DESTDIR` (e.g. `make DESTDIR=\"$DESTDIR\" install` or manually copy files relative to `$DESTDIR` under `/usr/bin`, `/usr/lib`, etc.). Make sure to enforce chmod 755 on directories and binaries.\n\n"
+        "Once you have written `package.manifest` and `package.justfile` successfully, print a confirmation report."
+    ),
+    tools=[google_search, write_package_file, read_package_file, fetch_source_checksum],
+    before_model_callback=fix_mixed_tools_callback
+)
+
 # ------------------------------------------------------------------------------
 # 4. Master Workflow Coordinator
 # ------------------------------------------------------------------------------
@@ -193,6 +241,7 @@ class Workflow(BaseAgent):
     triage_agent: Agent
     refiner_agent: Agent
     builder_agent: Agent
+    scaffold_agent: Agent
 
     async def _run_async_impl(
         self, ctx: InvocationContext
@@ -358,6 +407,7 @@ class Workflow(BaseAgent):
             from app.workflows.create import CreateWorkflow
             workflow = CreateWorkflow(
                 name="create_workflow",
+                scaffold_agent=self.scaffold_agent,
                 refiner_agent=self.refiner_agent,
                 builder_agent=self.builder_agent
             )
@@ -372,6 +422,7 @@ class Workflow(BaseAgent):
             from app.workflows.import_pkg import ImportWorkflow
             workflow = ImportWorkflow(
                 name="import_workflow",
+                scaffold_agent=self.scaffold_agent,
                 refiner_agent=self.refiner_agent,
                 builder_agent=self.builder_agent
             )
@@ -384,7 +435,8 @@ root_agent = Workflow(
     name="root_agent",
     triage_agent=triage_agent,
     refiner_agent=refiner_agent,
-    builder_agent=builder_agent
+    builder_agent=builder_agent,
+    scaffold_agent=scaffold_agent
 )
 
 app = App(

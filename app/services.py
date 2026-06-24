@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from google.adk.cli.service_registry import get_service_registry
 
 from app.memory_service import PersistentGeminiMemoryService
@@ -19,8 +20,10 @@ from app.memory_service import PersistentGeminiMemoryService
 
 def gemini_memory_factory(uri: str, **kwargs):
     """Factory to construct the PersistentGeminiMemoryService."""
-    # We can parse the path from URI if needed, but defaults to "./chroma_memory"
-    return PersistentGeminiMemoryService()
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(app_dir)
+    chroma_path = os.path.join(root_dir, ".adk", "chroma_memory")
+    return PersistentGeminiMemoryService(path=chroma_path)
 
 
 # Register custom memory service under scheme "geminimemory"
