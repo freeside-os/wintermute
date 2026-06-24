@@ -20,7 +20,7 @@ from google.adk.artifacts.file_artifact_service import FileArtifactService
 from app.memory_service import PersistentGeminiMemoryService
 
 
-def gemini_memory_factory(uri: str, **kwargs):
+def memory_factory(uri: str, **kwargs):
     """Factory to construct the PersistentGeminiMemoryService."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.dirname(app_dir)
@@ -28,7 +28,7 @@ def gemini_memory_factory(uri: str, **kwargs):
     return PersistentGeminiMemoryService(path=chroma_path)
 
 
-def winter_session_factory(uri: str, **kwargs):
+def sessions_factory(uri: str, **kwargs):
     """Factory to construct the SqliteSessionService for wintermute."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.dirname(app_dir)
@@ -37,7 +37,7 @@ def winter_session_factory(uri: str, **kwargs):
     return SqliteSessionService(db_path=db_path)
 
 
-def winter_artifact_factory(uri: str, **kwargs):
+def artifacts_factory(uri: str, **kwargs):
     """Factory to construct the FileArtifactService for wintermute."""
     app_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.dirname(app_dir)
@@ -46,9 +46,9 @@ def winter_artifact_factory(uri: str, **kwargs):
     return FileArtifactService(root_dir=Path(artifacts_dir))
 
 
-# Register custom memory service under scheme "geminimemory"
-get_service_registry().register_memory_service("geminimemory", gemini_memory_factory)
+# Register custom memory service under scheme "memory"
+get_service_registry().register_memory_service("memory", memory_factory)
 
 # Register custom session and artifact services
-get_service_registry().register_session_service("wintersession", winter_session_factory)
-get_service_registry().register_artifact_service("winterartifact", winter_artifact_factory)
+get_service_registry().register_session_service("session", sessions_factory)
+get_service_registry().register_artifact_service("artifact", artifacts_factory)
