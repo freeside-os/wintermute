@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
+from pathlib import Path
 from google.adk.cli.service_registry import get_service_registry
+from google.adk.sessions.sqlite_session_service import SqliteSessionService
+from google.adk.artifacts.file_artifact_service import FileArtifactService
 
 from app.memory_service import PersistentGeminiMemoryService
 
@@ -26,5 +28,27 @@ def gemini_memory_factory(uri: str, **kwargs):
     return PersistentGeminiMemoryService(path=chroma_path)
 
 
+def winter_session_factory(uri: str, **kwargs):
+    """Factory to construct the SqliteSessionService for wintermute."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(app_dir)
+    db_path = os.path.join(root_dir, ".adk", "session.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    return SqliteSessionService(db_path=db_path)
+
+
+def winter_artifact_factory(uri: str, **kwargs):
+    """Factory to construct the FileArtifactService for wintermute."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(app_dir)
+    artifacts_dir = os.path.join(root_dir, ".adk", "artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+    return FileArtifactService(root_dir=Path(artifacts_dir))
+
+
 # Register custom memory service under scheme "geminimemory"
 get_service_registry().register_memory_service("geminimemory", gemini_memory_factory)
+
+# Register custom session and artifact services
+get_service_registry().register_session_service("wintersession", winter_session_factory)
+get_service_registry().register_artifact_service("winterartifact", winter_artifact_factory)
