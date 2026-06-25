@@ -9,7 +9,8 @@ from app.app_utils.retry import retry
 from app.consts import SECURITY_FEED_CACHE_TTL_SECONDS
 
 
-def import_pkgbuild(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def import_pkgbuild(pkg_name: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Converts an Arch Linux PKGBUILD to Freeside format.
 
     Args:
@@ -34,7 +35,8 @@ def import_pkgbuild(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def list_workspace_packages(workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def list_workspace_packages(workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Lists all existing packages in the packages directory.
 
     Returns:
@@ -52,7 +54,8 @@ def list_workspace_packages(workspace_root: str = "/home/dq/Code/freeside") -> d
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def list_packages(workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def list_packages(workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Lists all existing packages in the packages directory.
 
     Returns:
@@ -68,7 +71,8 @@ def _send_request(req: urllib.request.Request, timeout: int) -> bytes:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
-def query_security_feeds(workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def query_security_feeds(workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem, using a local cache."""
     cache_dir = os.path.expanduser("~/.cache/wintermute")
     cache_file = os.path.join(cache_dir, "security_feeds_cache.json")

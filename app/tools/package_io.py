@@ -7,7 +7,8 @@ from typing import Any
 from app.app_utils.retry import retry
 
 
-def apply_patch(pkg_name: str, target_file: str, patch_content: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def apply_patch(pkg_name: str, target_file: str, patch_content: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Generates and writes a patch file to packages/<pkg_name>/patches/ and registers it in package.justfile.
 
     Args:
@@ -82,7 +83,8 @@ def apply_patch(pkg_name: str, target_file: str, patch_content: str, workspace_r
 def _download_url(url: str) -> tuple[str, Any]:
     return urllib.request.urlretrieve(url)
 
-def upgrade_package_version(pkg_name: str, new_version: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def upgrade_package_version(pkg_name: str, new_version: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Bumps package version, updates URLs, downloads new sources to compute SHA256 checksums, and updates package.manifest.
 
     Args:
@@ -139,7 +141,8 @@ def upgrade_package_version(pkg_name: str, new_version: str, workspace_root: str
     except Exception as e:
         return {"status": "error", "message": f"Upgrade failed: {e!s}"}
 
-def read_package_file(pkg_name: str, filename: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def read_package_file(pkg_name: str, filename: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Reads a file within a package's directory.
 
     Args:
@@ -159,7 +162,8 @@ def read_package_file(pkg_name: str, filename: str, workspace_root: str = "/home
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def write_package_file(pkg_name: str, filename: str, content: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def write_package_file(pkg_name: str, filename: str, content: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Writes or overwrites a file within a package's directory.
 
     Args:

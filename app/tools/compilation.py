@@ -4,7 +4,8 @@ import re
 import subprocess
 
 
-def verify_package(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def verify_package(pkg_name: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Verifies the package recipe and manifest validity.
 
     Args:
@@ -29,7 +30,8 @@ def verify_package(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside"
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def build_package(pkg_name: str, keep_sandbox: bool = False, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def build_package(pkg_name: str, keep_sandbox: bool = False, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Builds a package inside the systemd-nspawn sandboxed container core.
 
     Args:
@@ -62,7 +64,8 @@ def build_package(pkg_name: str, keep_sandbox: bool = False, workspace_root: str
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def read_build_logs(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def read_build_logs(pkg_name: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Reads stdout and stderr log from the most recent compile attempt of a package.
 
     Args:

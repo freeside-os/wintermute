@@ -6,7 +6,8 @@ import tomllib
 class DependencyGraph:
     """Represents a package dependency graph across the workspace."""
 
-    def __init__(self, workspace_root: str = "/home/dq/Code/freeside"):
+    def __init__(self, workspace_root: str | None = None):
+        workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
         self.workspace_root = workspace_root
         self.packages_dir = os.path.join(workspace_root, "packages")
         self.nodes = {}  # pkg_name -> manifest_data dict
@@ -172,7 +173,8 @@ def _parse_version(ver_str: str) -> tuple:
     return tuple(parts)
 
 
-def check_version_constraints(pkg_name: str, constraint: str, workspace_root: str = "/home/dq/Code/freeside") -> bool:
+def check_version_constraints(pkg_name: str, constraint: str, workspace_root: str | None = None) -> bool:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Helper tool to check version constraints.
 
     Args:
@@ -222,7 +224,8 @@ def check_version_constraints(pkg_name: str, constraint: str, workspace_root: st
     return False
 
 
-def build_dependency_tree(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def build_dependency_tree(pkg_name: str, workspace_root: str | None = None) -> dict:
+    workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
     """Helper tool to build dependency trees.
 
     Args:
