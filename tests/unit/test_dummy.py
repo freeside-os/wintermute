@@ -19,7 +19,7 @@ def test_dependency_graph() -> None:
         check_version_constraints,
     )
 
-    graph = DependencyGraph()
+    graph = DependencyGraph(workspace_root="tests/test_data")
 
     # Assert nodes are successfully parsed from the workspace
     assert len(graph.nodes) > 0
@@ -52,14 +52,14 @@ def test_dependency_graph() -> None:
 
     # Check version constraints
     # zlib is version 1.3.2 in local workspace
-    assert check_version_constraints("zlib", ">=1.0.0")
-    assert check_version_constraints("zlib", "<2.0.0")
-    assert check_version_constraints("zlib", "==1.3.2")
-    assert not check_version_constraints("zlib", "<1.0.0")
-    assert not check_version_constraints("zlib", ">1.3.2")
+    assert check_version_constraints("zlib", ">=1.0.0", workspace_root="tests/test_data")
+    assert check_version_constraints("zlib", "<2.0.0", workspace_root="tests/test_data")
+    assert check_version_constraints("zlib", "==1.3.2", workspace_root="tests/test_data")
+    assert not check_version_constraints("zlib", "<1.0.0", workspace_root="tests/test_data")
+    assert not check_version_constraints("zlib", ">1.3.2", workspace_root="tests/test_data")
 
     # Check dependency tree representation
-    tree = build_dependency_tree("zlib")
+    tree = build_dependency_tree("zlib", workspace_root="tests/test_data")
     assert tree["package"] == "zlib"
     assert any(d["package"] == "musl" for d in tree["dependencies"])
 
@@ -76,7 +76,7 @@ def test_query_security_feeds() -> None:
         except Exception:
             pass
 
-    res = query_security_feeds()
+    res = query_security_feeds(workspace_root="tests/test_data")
     assert res["status"] in ("success", "fallback")
     assert "cves" in res
 
@@ -104,18 +104,18 @@ def test_package_io() -> None:
     filename = "test_io.txt"
     content = "Hello Wintermute IO!"
 
-    res = write_package_file(pkg, filename, content)
+    res = write_package_file(pkg, filename, content, workspace_root="tests/test_data")
     assert res["status"] == "success"
 
-    res_read = read_package_file(pkg, filename)
+    res_read = read_package_file(pkg, filename, workspace_root="tests/test_data")
     assert res_read["status"] == "success"
     assert res_read["content"] == content
 
     # Clean up
-    path = f"/home/dq/Code/freeside/packages/{pkg}/{filename}"
+    path = f"tests/test_data/packages/{pkg}/{filename}"
     if os.path.exists(path):
         os.remove(path)
-    pkg_dir = f"/home/dq/Code/freeside/packages/{pkg}"
+    pkg_dir = f"tests/test_data/packages/{pkg}"
     if os.path.exists(pkg_dir):
         try:
             os.rmdir(pkg_dir)
@@ -131,15 +131,15 @@ def test_apply_patch() -> None:
     justfile_content = "build:\n\ttar -xf source.tar.gz\n\tcd src && make\n"
 
     # Setup dummy package justfile
-    write_package_file(pkg, "package.justfile", justfile_content)
+    write_package_file(pkg, "package.justfile", justfile_content, workspace_root="tests/test_data")
 
     patch_content = "--- a/file.c\n+++ b/file.c\n@@ -1,1 +1,2 @@\n+patched\n"
-    res = apply_patch(pkg, "src/file.c", patch_content)
+    res = apply_patch(pkg, "src/file.c", patch_content, workspace_root="tests/test_data")
     assert res["status"] == "success"
     assert "patch_file" in res
 
     # Verify justfile was updated
-    justfile_path = f"/home/dq/Code/freeside/packages/{pkg}/package.justfile"
+    justfile_path = f"tests/test_data/packages/{pkg}/package.justfile"
     assert os.path.exists(justfile_path)
     with open(justfile_path, encoding="utf-8") as f:
         updated_content = f.read()
@@ -147,13 +147,13 @@ def test_apply_patch() -> None:
     assert "patch -p1 -d src < /workspace/packages/$PKG_NAME/patches/" in updated_content
 
     # Clean up
-    patches_dir = f"/home/dq/Code/freeside/packages/{pkg}/patches"
+    patches_dir = f"tests/test_data/packages/{pkg}/patches"
     if os.path.exists(patches_dir):
         for f_name in os.listdir(patches_dir):
             os.remove(os.path.join(patches_dir, f_name))
         os.rmdir(patches_dir)
     os.remove(justfile_path)
-    pkg_dir = f"/home/dq/Code/freeside/packages/{pkg}"
+    pkg_dir = f"tests/test_data/packages/{pkg}"
     if os.path.exists(pkg_dir):
         try:
             os.rmdir(pkg_dir)

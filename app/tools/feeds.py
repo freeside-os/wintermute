@@ -9,7 +9,7 @@ from app.app_utils.retry import retry
 from app.consts import SECURITY_FEED_CACHE_TTL_SECONDS
 
 
-def import_pkgbuild(pkg_name: str) -> dict:
+def import_pkgbuild(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Converts an Arch Linux PKGBUILD to Freeside format.
 
     Args:
@@ -18,7 +18,7 @@ def import_pkgbuild(pkg_name: str) -> dict:
     Returns:
         A dictionary containing the status of the command and its output.
     """
-    packages_dir = "/home/dq/Code/freeside/packages"
+    packages_dir = f"{workspace_root}/packages"
     try:
         res = subprocess.run(
             ["python3", "fspack.py", "convert", pkg_name],
@@ -34,13 +34,13 @@ def import_pkgbuild(pkg_name: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def list_workspace_packages() -> dict:
+def list_workspace_packages(workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Lists all existing packages in the packages directory.
 
     Returns:
         A dictionary containing a list of package names.
     """
-    packages_dir = "/home/dq/Code/freeside/packages"
+    packages_dir = f"{workspace_root}/packages"
     try:
         items = os.listdir(packages_dir)
         pkgs = []
@@ -52,13 +52,13 @@ def list_workspace_packages() -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def list_packages() -> dict:
+def list_packages(workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Lists all existing packages in the packages directory.
 
     Returns:
         A dictionary containing a list of package names.
     """
-    return list_workspace_packages()
+    return list_workspace_packages(workspace_root)
 
 
 
@@ -68,7 +68,7 @@ def _send_request(req: urllib.request.Request, timeout: int) -> bytes:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
-def query_security_feeds() -> dict:
+def query_security_feeds(workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem, using a local cache."""
     cache_dir = os.path.expanduser("~/.cache/wintermute")
     cache_file = os.path.join(cache_dir, "security_feeds_cache.json")
@@ -85,7 +85,7 @@ def query_security_feeds() -> dict:
         except Exception:
             pass
 
-    packages_dir = "/home/dq/Code/freeside/packages"
+    packages_dir = f"{workspace_root}/packages"
     queries = []
     pkg_list = []
 

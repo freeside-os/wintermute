@@ -25,7 +25,14 @@ from app.memory_service import PersistentGeminiMemoryService
 
 
 @pytest.mark.asyncio
-async def test_persistent_gemini_memory_service() -> None:
+async def test_persistent_gemini_memory_service(monkeypatch) -> None:
+    import chromadb.utils.embedding_functions as embedding_functions
+    class MockGoogleGeminiEmbeddingFunction(embedding_functions.GoogleGeminiEmbeddingFunction):
+        def __init__(self, *args, **kwargs):
+            pass
+        def __call__(self, input):
+            return [[0.1] * 768 for _ in input]
+    monkeypatch.setattr(embedding_functions, "GoogleGeminiEmbeddingFunction", MockGoogleGeminiEmbeddingFunction)
     # Use a temporary directory for ChromaDB in testing
     test_path = "./chroma_memory_test"
     if os.path.exists(test_path):

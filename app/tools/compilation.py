@@ -4,7 +4,7 @@ import re
 import subprocess
 
 
-def verify_package(pkg_name: str) -> dict:
+def verify_package(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Verifies the package recipe and manifest validity.
 
     Args:
@@ -13,7 +13,7 @@ def verify_package(pkg_name: str) -> dict:
     Returns:
         A dictionary containing the verification status and output.
     """
-    packages_dir = "/home/dq/Code/freeside/packages"
+    packages_dir = f"{workspace_root}/packages"
     try:
         res = subprocess.run(
             ["python3", "fspack.py", "verify", pkg_name],
@@ -29,7 +29,7 @@ def verify_package(pkg_name: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
+def build_package(pkg_name: str, keep_sandbox: bool = False, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Builds a package inside the systemd-nspawn sandboxed container core.
 
     Args:
@@ -40,16 +40,16 @@ def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
         A dictionary containing the build status, stdout, and stderr.
     """
     env = os.environ.copy()
-    env["STRAYLIGHT_PACKAGES_ROOT"] = "/home/dq/Code/freeside/packages"
-    env["STRAYLIGHT_BUILDER_ROOT"] = "/home/dq/Code/freeside/build"
-    env["STRAYLIGHT_BUILDER_OUTPUT_ROOT"] = "/home/dq/Code/freeside/build/packages"
+    env["STRAYLIGHT_PACKAGES_ROOT"] = f"{workspace_root}/packages"
+    env["STRAYLIGHT_BUILDER_ROOT"] = f"{workspace_root}/build"
+    env["STRAYLIGHT_BUILDER_OUTPUT_ROOT"] = f"{workspace_root}/build/packages"
     try:
-        cmd = ["sudo", "-E", "/home/dq/Code/freeside/build/straylight", "build", "--pkg", pkg_name]
+        cmd = ["sudo", "-E", f"{workspace_root}/build/straylight", "build", "--pkg", pkg_name]
         if keep_sandbox:
             cmd.append("--keep-sandbox")
         res = subprocess.run(
             cmd,
-            cwd="/home/dq/Code/freeside",
+            cwd=workspace_root,
             env=env,
             capture_output=True,
             text=True
@@ -62,7 +62,7 @@ def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def read_build_logs(pkg_name: str) -> dict:
+def read_build_logs(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Reads stdout and stderr log from the most recent compile attempt of a package.
 
     Args:
@@ -71,7 +71,7 @@ def read_build_logs(pkg_name: str) -> dict:
     Returns:
         A dictionary with the status, log file name, and log content.
     """
-    log_dir = "/home/dq/Code/freeside/build"
+    log_dir = f"{workspace_root}/build"
     log_pattern = os.path.join(log_dir, f"{pkg_name}-*.log")
     log_files = glob.glob(log_pattern)
     if not log_files:

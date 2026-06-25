@@ -7,7 +7,7 @@ from typing import Any
 from app.app_utils.retry import retry
 
 
-def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
+def apply_patch(pkg_name: str, target_file: str, patch_content: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Generates and writes a patch file to packages/<pkg_name>/patches/ and registers it in package.justfile.
 
     Args:
@@ -18,7 +18,7 @@ def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
     Returns:
         A dictionary indicating success or failure.
     """
-    patches_dir = f"/home/dq/Code/freeside/packages/{pkg_name}/patches"
+    patches_dir = f"{workspace_root}/packages/{pkg_name}/patches"
     os.makedirs(patches_dir, exist_ok=True)
 
     existing = [f for f in os.listdir(patches_dir) if f.endswith(".patch")]
@@ -31,7 +31,7 @@ def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
         with open(patch_path, "w", encoding="utf-8") as f:
             f.write(patch_content)
 
-        justfile_path = f"/home/dq/Code/freeside/packages/{pkg_name}/package.justfile"
+        justfile_path = f"{workspace_root}/packages/{pkg_name}/package.justfile"
         if not os.path.exists(justfile_path):
             return {"status": "error", "message": f"package.justfile not found at {justfile_path}"}
 
@@ -82,7 +82,7 @@ def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
 def _download_url(url: str) -> tuple[str, Any]:
     return urllib.request.urlretrieve(url)
 
-def upgrade_package_version(pkg_name: str, new_version: str) -> dict:
+def upgrade_package_version(pkg_name: str, new_version: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Bumps package version, updates URLs, downloads new sources to compute SHA256 checksums, and updates package.manifest.
 
     Args:
@@ -92,7 +92,7 @@ def upgrade_package_version(pkg_name: str, new_version: str) -> dict:
     Returns:
         A dictionary indicating success or failure.
     """
-    manifest_path = f"/home/dq/Code/freeside/packages/{pkg_name}/package.manifest"
+    manifest_path = f"{workspace_root}/packages/{pkg_name}/package.manifest"
     if not os.path.exists(manifest_path):
         return {"status": "error", "message": f"Manifest not found at {manifest_path}"}
 
@@ -139,7 +139,7 @@ def upgrade_package_version(pkg_name: str, new_version: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": f"Upgrade failed: {e!s}"}
 
-def read_package_file(pkg_name: str, filename: str) -> dict:
+def read_package_file(pkg_name: str, filename: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Reads a file within a package's directory.
 
     Args:
@@ -149,7 +149,7 @@ def read_package_file(pkg_name: str, filename: str) -> dict:
     Returns:
         A dictionary containing the status and file content.
     """
-    path = f"/home/dq/Code/freeside/packages/{pkg_name}/{filename}"
+    path = f"{workspace_root}/packages/{pkg_name}/{filename}"
     if not os.path.exists(path):
         return {"status": "error", "message": f"File {filename} not found for package {pkg_name} at {path}."}
     try:
@@ -159,7 +159,7 @@ def read_package_file(pkg_name: str, filename: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def write_package_file(pkg_name: str, filename: str, content: str) -> dict:
+def write_package_file(pkg_name: str, filename: str, content: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
     """Writes or overwrites a file within a package's directory.
 
     Args:
@@ -170,7 +170,7 @@ def write_package_file(pkg_name: str, filename: str, content: str) -> dict:
     Returns:
         A dictionary indicating success or failure.
     """
-    path = f"/home/dq/Code/freeside/packages/{pkg_name}/{filename}"
+    path = f"{workspace_root}/packages/{pkg_name}/{filename}"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
