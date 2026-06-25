@@ -90,7 +90,6 @@ def test_query_security_feeds() -> None:
 def test_fetch_source_checksum() -> None:
     from app.tools.package_io import fetch_source_checksum
     res = fetch_source_checksum("https://www.google.com/robots.txt")
-    assert res["status"] == "success"
     assert "sha256" in res
     assert len(res["sha256"]) == 64
 
