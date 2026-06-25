@@ -14,13 +14,14 @@
 
 import os
 import shutil
-import pytest
 
-from app.memory_service import PersistentGeminiMemoryService
+import pytest
 from google.adk.events.event import Event
 from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions.session import Session
 from google.genai import types
+
+from app.memory_service import PersistentGeminiMemoryService
 
 
 @pytest.mark.asyncio
@@ -74,7 +75,7 @@ async def test_persistent_gemini_memory_service() -> None:
             author="memory_summarizer_agent",
             timestamp="2026-06-23T00:00:00",
         )
-        
+
         await service.add_memory(
             app_name="test_app",
             user_id="test_user",
@@ -93,7 +94,7 @@ async def test_persistent_gemini_memory_service() -> None:
         memories = results.memories if hasattr(results, "memories") else results
         # We expect both the session and the summary to match
         assert len(memories) >= 1
-        
+
         # Ensure our direct summary is retrieved
         summary_results = [m for m in memories if m.id == "test-summary-456"]
         assert len(summary_results) == 1

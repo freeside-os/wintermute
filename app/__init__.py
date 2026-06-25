@@ -1,17 +1,15 @@
-# Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+from google.adk.agents.invocation_context import InvocationContext
 
-from .agent import app
+_orig_model_copy = InvocationContext.model_copy
+
+def _patched_model_copy(self, *, update=None, deep=False):
+    copied = _orig_model_copy(self, update=update, deep=deep)
+    copied._event_queue = self._event_queue
+    copied._invocation_cost_manager = self._invocation_cost_manager
+    return copied
+
+InvocationContext.model_copy = _patched_model_copy
+
+from .agent import app  # noqa: E402
 
 __all__ = ["app"]

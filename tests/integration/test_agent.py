@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import patch
+
 from google.adk.agents.run_config import RunConfig, StreamingMode
+from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -20,7 +23,21 @@ from google.genai import types
 from app.agent import root_agent
 
 
-def test_agent_stream() -> None:
+async def mock_generate_content_async(*args, **kwargs):
+    yield LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part.from_text(
+                    text='{"pkg_name": null, "action": "out_of_scope", "version": null, "group": null, "is_security_update": false}'
+                )
+            ],
+        )
+    )
+
+
+@patch("google.adk.models.Gemini.generate_content_async", side_effect=mock_generate_content_async)
+def test_agent_stream(mock_gen) -> None:
     """
     Integration test for the agent stream functionality.
     Tests that the agent returns valid streaming responses.
@@ -45,13 +62,16 @@ def test_agent_stream() -> None:
     )
     assert len(events) > 0, "Expected at least one message"
 
-    has_text_content = False
+    has_expected_text = False
+    expected_text = (
+        "I am the Wintermute packaging agent, designed to create, import, fix, "
+        "upgrade, review, or audit packages for Freeside OS. This request "
+        "seems out of scope. Please ask a package management or OS maintenance query."
+    )
     for event in events:
-        if (
-            event.content
-            and event.content.parts
-            and any(part.text for part in event.content.parts)
-        ):
-            has_text_content = True
-            break
-    assert has_text_content, "Expected at least one message with text content"
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text and expected_text in part.text:
+                    has_expected_text = True
+                    break
+    assert has_expected_text, "Expected out of scope rejection message"

@@ -1,19 +1,12 @@
-# Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+import json
 import os
 import subprocess
+import time
+import tomllib
+import urllib.request
+
+from app.app_utils.retry import retry
+from app.consts import SECURITY_FEED_CACHE_TTL_SECONDS
 
 
 def import_pkgbuild(pkg_name: str) -> dict:
@@ -67,22 +60,25 @@ def list_packages() -> dict:
     """
     return list_workspace_packages()
 
+
+
+
+@retry()
+def _send_request(req: urllib.request.Request, timeout: int) -> bytes:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
 def query_security_feeds() -> dict:
     """Queries OSV security feeds for actual CVE updates in the Alpine v3.20 ecosystem, using a local cache."""
-    import json
-    import time
-    import tomllib
-    import urllib.request
-
     cache_dir = os.path.expanduser("~/.cache/wintermute")
     cache_file = os.path.join(cache_dir, "security_feeds_cache.json")
 
-    # Check if cache is valid (less than 8 hours old)
+    # Check if cache is valid (using SECURITY_FEED_CACHE_TTL_SECONDS)
     if os.path.exists(cache_file):
         try:
-            with open(cache_file, "r") as f:
+            with open(cache_file) as f:
                 cached = json.load(f)
-            if time.time() - cached.get("timestamp", 0) < 28800:
+            if time.time() - cached.get("timestamp", 0) < SECURITY_FEED_CACHE_TTL_SECONDS:
                 res = cached.get("data")
                 if res and res.get("status") in ("success", "fallback"):
                     return res
@@ -138,70 +134,70 @@ def query_security_feeds() -> dict:
 
     cves_found = []
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            res_data = json.loads(resp.read().decode("utf-8"))
-            results = res_data.get("results", [])
+        res_bytes = _send_request(req, timeout=10)
+        res_data = json.loads(res_bytes.decode("utf-8"))
+        results = res_data.get("results", [])
 
-            for i, res in enumerate(results):
-                vulns = res.get("vulns", [])
-                if not vulns:
+        for i, res in enumerate(results):
+            vulns = res.get("vulns", [])
+            if not vulns:
+                continue
+
+            pkg_name = pkg_list[i]
+            # Fetch details for the first vulnerability
+            vuln = vulns[0]
+            vuln_id = vuln.get("id")
+
+            # Fetch details from OSV vuln endpoint
+            detail_url = f"https://api.osv.dev/v1/vulns/{vuln_id}"
+            detail_req = urllib.request.Request(detail_url, method="GET")
+            try:
+                d_bytes = _send_request(detail_req, timeout=5)
+                d_data = json.loads(d_bytes.decode("utf-8"))
+
+                # Find cve_id from aliases
+                cve_id = vuln_id
+                aliases = d_data.get("aliases", [])
+                for alias in aliases:
+                    if alias.startswith("CVE-"):
+                        cve_id = alias
+                        break
+
+                # Find fixed version
+                fixed_version = None
+                affected_list = d_data.get("affected", [])
+                for aff in affected_list:
+                    aff_pkg = aff.get("package", {})
+                    if aff_pkg.get("name") == pkg_name:
+                        ranges = aff.get("ranges", [])
+                        for r in ranges:
+                            events = r.get("events", [])
+                            for ev in events:
+                                if "fixed" in ev:
+                                    fixed_version = ev["fixed"]
+                                    break
+
+                if not fixed_version:
                     continue
 
-                pkg_name = pkg_list[i]
-                # Fetch details for the first vulnerability
-                vuln = vulns[0]
-                vuln_id = vuln.get("id")
+                # Parse severity
+                severity = "HIGH"
+                severities = d_data.get("severity", [])
+                if severities:
+                    score_str = severities[0].get("score", "")
+                    if "PR:N" in score_str or "C:H" in score_str:
+                        severity = "CRITICAL"
+                    elif "PR:H" in score_str:
+                        severity = "MODERATE"
 
-                # Fetch details from OSV vuln endpoint
-                detail_url = f"https://api.osv.dev/v1/vulns/{vuln_id}"
-                detail_req = urllib.request.Request(detail_url, method="GET")
-                try:
-                    with urllib.request.urlopen(detail_req, timeout=5) as d_resp:
-                        d_data = json.loads(d_resp.read().decode("utf-8"))
-
-                        # Find cve_id from aliases
-                        cve_id = vuln_id
-                        aliases = d_data.get("aliases", [])
-                        for alias in aliases:
-                            if alias.startswith("CVE-"):
-                                cve_id = alias
-                                break
-
-                        # Find fixed version
-                        fixed_version = None
-                        affected_list = d_data.get("affected", [])
-                        for aff in affected_list:
-                            aff_pkg = aff.get("package", {})
-                            if aff_pkg.get("name") == pkg_name:
-                                ranges = aff.get("ranges", [])
-                                for r in ranges:
-                                    events = r.get("events", [])
-                                    for ev in events:
-                                        if "fixed" in ev:
-                                            fixed_version = ev["fixed"]
-                                            break
-
-                        if not fixed_version:
-                            continue
-
-                        # Parse severity
-                        severity = "HIGH"
-                        severities = d_data.get("severity", [])
-                        if severities:
-                            score_str = severities[0].get("score", "")
-                            if "PR:N" in score_str or "C:H" in score_str:
-                                severity = "CRITICAL"
-                            elif "PR:H" in score_str:
-                                severity = "MODERATE"
-
-                        cves_found.append({
-                            "package": pkg_name,
-                            "cve_id": cve_id,
-                            "severity": severity,
-                            "fixed_version": fixed_version
-                        })
-                except Exception:
-                    pass
+                cves_found.append({
+                    "package": pkg_name,
+                    "cve_id": cve_id,
+                    "severity": severity,
+                    "fixed_version": fixed_version
+                })
+            except Exception:
+                pass
     except Exception as e:
         # Graceful fallback: return mock/test security feed data if API is down
         fallback_res = {

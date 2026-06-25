@@ -64,10 +64,11 @@ def test_dependency_graph() -> None:
     assert any(d["package"] == "musl" for d in tree["dependencies"])
 
 def test_query_security_feeds() -> None:
-    import os
     import json
+    import os
+
     from app.tools.feeds import query_security_feeds
-    
+
     cache_file = os.path.expanduser("~/.cache/wintermute/security_feeds_cache.json")
     if os.path.exists(cache_file):
         try:
@@ -78,10 +79,10 @@ def test_query_security_feeds() -> None:
     res = query_security_feeds()
     assert res["status"] in ("success", "fallback")
     assert "cves" in res
-    
+
     # Verify cache file was successfully created
     assert os.path.exists(cache_file)
-    with open(cache_file, "r") as f:
+    with open(cache_file) as f:
         cached = json.load(f)
     assert "timestamp" in cached
     assert cached["data"]["status"] == res["status"]
@@ -94,8 +95,9 @@ def test_fetch_source_checksum() -> None:
     assert len(res["sha256"]) == 64
 
 def test_package_io() -> None:
-    from app.tools.package_io import read_package_file, write_package_file
     import os
+
+    from app.tools.package_io import read_package_file, write_package_file
 
     # Write a dummy package file
     pkg = "dummy_test_package_io"
@@ -121,12 +123,13 @@ def test_package_io() -> None:
             pass
 
 def test_apply_patch() -> None:
-    from app.tools.package_io import apply_patch, write_package_file
     import os
+
+    from app.tools.package_io import apply_patch, write_package_file
 
     pkg = "dummy_test_patch"
     justfile_content = "build:\n\ttar -xf source.tar.gz\n\tcd src && make\n"
-    
+
     # Setup dummy package justfile
     write_package_file(pkg, "package.justfile", justfile_content)
 

@@ -1,21 +1,10 @@
-# Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import hashlib
 import os
 import re
 import urllib.request
+from typing import Any
+
+from app.app_utils.retry import retry
 
 
 def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
@@ -86,6 +75,13 @@ def apply_patch(pkg_name: str, target_file: str, patch_content: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+
+
+@retry()
+def _download_url(url: str) -> tuple[str, Any]:
+    return urllib.request.urlretrieve(url)
+
 def upgrade_package_version(pkg_name: str, new_version: str) -> dict:
     """Bumps package version, updates URLs, downloads new sources to compute SHA256 checksums, and updates package.manifest.
 
@@ -118,7 +114,7 @@ def upgrade_package_version(pkg_name: str, new_version: str) -> dict:
                 content = content.replace(url, new_url)
 
                 # Download to compute new hash
-                tmp_file, _ = urllib.request.urlretrieve(new_url)
+                tmp_file, _ = _download_url(new_url)
                 h = hashlib.sha256()
                 with open(tmp_file, "rb") as tf:
                     for chunk in iter(lambda: tf.read(65536), b""):
@@ -193,7 +189,7 @@ def fetch_source_checksum(url: str) -> dict:
         A dictionary with the success status and the computed sha256 hex digest, or error details.
     """
     try:
-        tmp_file, _ = urllib.request.urlretrieve(url)
+        tmp_file, _ = _download_url(url)
         h = hashlib.sha256()
         with open(tmp_file, "rb") as f:
             for chunk in iter(lambda: f.read(65536), b""):

@@ -3399,9 +3399,10 @@ source = { editable = "." }
 dependencies = [
     { name = "chromadb" },
     { name = "gcsfs" },
-    { name = "google-adk" },
+    { name = "google-adk", extra = ["eval"] },
     { name = "google-cloud-logging" },
     { name = "opentelemetry-instrumentation-google-genai" },
+    { name = "python-dotenv" },
 ]
 
 [package.optional-dependencies]
@@ -3427,11 +3428,12 @@ requires-dist = [
     { name = "chromadb", specifier = ">=1.5.9" },
     { name = "codespell", marker = "extra == 'lint'", specifier = ">=2.2.0,<3.0.0" },
     { name = "gcsfs", specifier = ">=2024.11.0" },
-    { name = "google-adk", specifier = ">=2.0.0,<3.0.0" },
+    { name = "google-adk", extras = ["eval"], specifier = ">=2.0.0,<3.0.0" },
     { name = "google-adk", extras = ["eval"], marker = "extra == 'eval'", specifier = ">=2.0.0,<3.0.0" },
     { name = "google-cloud-aiplatform", extras = ["evaluation"], marker = "extra == 'eval'", specifier = ">=1.156.0" },
     { name = "google-cloud-logging", specifier = ">=3.12.0,<4.0.0" },
     { name = "opentelemetry-instrumentation-google-genai", specifier = ">=0.1.0,<1.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.1,<2.0.0" },
     { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.4.6,<1.0.0" },
     { name = "ty", marker = "extra == 'lint'", specifier = ">=0.0.1a0" },
 ]

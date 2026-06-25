@@ -1,17 +1,3 @@
-# Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import datetime
 
 from google.adk.agents import Agent
@@ -20,13 +6,15 @@ from google.adk.models import Gemini
 from google.adk.tools import ToolContext
 from google.genai import types
 
+from app.consts import MODEL_MEM_SUMMARY, MODEL_RETRIES
+
 # Define a summarizer agent that acts as a workflow block to extract knowledge
 memory_summarizer_agent = Agent(
     name="memory_summarizer_agent",
     # Use flash model for fast and cost-effective summarization
     model=Gemini(
-        model="gemini-3.5-flash",
-        retry_options=types.HttpRetryOptions(attempts=3),
+        model=MODEL_MEM_SUMMARY,
+        retry_options=types.HttpRetryOptions(attempts=MODEL_RETRIES),
     ),
     instruction=(
         "You are the Memory Summarizer Agent for Freeside OS.\n"
