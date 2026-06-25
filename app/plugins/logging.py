@@ -171,6 +171,30 @@ class LoggingPlugin(BasePlugin):
 
     return None
 
+  def _get_tool_prefix(self, tool: BaseTool) -> str:
+    """Determine the log prefix for a tool based on its module."""
+    func = getattr(tool, "func", None)
+    if func and hasattr(func, "__module__"):
+        module = func.__module__
+    else:
+        module = tool.__class__.__module__
+
+    if module and module.startswith("app.tools"):
+        if "app.tools.memory" in module:
+            return "🧠 USING MEMORY TOOL"
+        elif "app.tools.compilation" in module:
+            return "🏗️ USING COMPILATION TOOL"
+        elif "app.tools.dependency" in module:
+            return "🔗 USING DEPENDENCY TOOL"
+        elif "app.tools.feeds" in module:
+            return "📡 USING FEEDS TOOL"
+        elif "app.tools.package_io" in module:
+            return "📦 USING PACKAGE IO TOOL"
+        else:
+            return "⚙️ USING INTERNAL TOOL"
+
+    return "🔧 TOOL"
+
   @override
   async def before_tool_callback(
       self,
@@ -180,7 +204,8 @@ class LoggingPlugin(BasePlugin):
       tool_context: ToolContext,
   ) -> Optional[dict]:
     """Log tool execution start."""
-    self._log(f"🔧 TOOL STARTING")
+    prefix = self._get_tool_prefix(tool)
+    self._log(f"{prefix} STARTING")
     self._log(f"   Tool Name: {tool.name}")
     self._log(f"   Agent: {tool_context.agent_name}")
     self._log(f"   Arguments: {self._format_args(tool_args)}")
@@ -196,7 +221,8 @@ class LoggingPlugin(BasePlugin):
       result: dict,
   ) -> Optional[dict]:
     """Log tool execution completion."""
-    self._log(f"🔧 TOOL COMPLETED")
+    prefix = self._get_tool_prefix(tool)
+    self._log(f"{prefix} COMPLETED")
     self._log(f"   Tool Name: {tool.name}")
     self._log(f"   Agent: {tool_context.agent_name}")
     self._log(f"   Result: {self._format_args(result)}")
@@ -227,7 +253,8 @@ class LoggingPlugin(BasePlugin):
       error: Exception,
   ) -> Optional[dict]:
     """Log tool error."""
-    self._log(f"🔧 TOOL ERROR")
+    prefix = self._get_tool_prefix(tool)
+    self._log(f"{prefix} ERROR")
     self._log(f"   Tool Name: {tool.name}")
     self._log(f"   Agent: {tool_context.agent_name}")
     self._log(f"   Arguments: {self._format_args(tool_args)}")
