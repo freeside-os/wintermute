@@ -36,8 +36,10 @@ def create_triage_agent() -> Agent:
             '  "is_security_update": true or false\n'
             "}\n\n"
             "If the prompt is general conversation, general knowledge, or unrelated to package management/Freeside OS, set action to 'out_of_scope' and pkg_name to null.\n\n"
-            "Use `search_memory` to check past triage history or general system queries if needed.\n"
-            "Use `save_memory_note` to explicitly save any new system configurations, rules, or notable triage history you establish."
+            "You have access to a long-term semantic memory store containing past Linux packaging sessions, build quirks, dependency workarounds, and resolution steps. \n\n"
+            "When analyzing a packaging request or troubleshooting a build failure:\n"
+            "1. Prioritize searching your memory if you encounter an error, specific compilation quirk, or unfamiliar toolchain behavior. Do not waste cycles re-discovering issues you have already solved.\n"
+            "2. When you successfully resolve a nuanced packaging issue, ensure the relevant quirks, errors, and final working configurations are saved clearly to your memory so you can recall them in future sessions."
         ),
         tools=[list_workspace_packages, list_packages, query_security_feeds, search_memory],
         output_key="triage_output",

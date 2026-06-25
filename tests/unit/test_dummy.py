@@ -12,14 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-def test_dependency_graph() -> None:
+def test_dependency_graph(tmpdir) -> None:
+    import os
+    import tomllib
     from app.tools.dependency import (
         DependencyGraph,
         build_dependency_tree,
         check_version_constraints,
     )
 
-    graph = DependencyGraph(workspace_root="tests/test_data")
+    workspace = str(tmpdir)
+    packages_dir = os.path.join(workspace, "packages")
+    os.makedirs(os.path.join(packages_dir, "zlib"))
+    os.makedirs(os.path.join(packages_dir, "musl"))
+    os.makedirs(os.path.join(packages_dir, "curl"))
+    os.makedirs(os.path.join(packages_dir, "openssl"))
+
+    with open(os.path.join(packages_dir, "zlib", "package.manifest"), "w") as f:
+        f.write('[package]\nname="zlib"\nversion="1.3.2"\ndependencies=["musl"]')
+    with open(os.path.join(packages_dir, "musl", "package.manifest"), "w") as f:
+        f.write('[package]\nname="musl"\nversion="1.2.4"')
+    with open(os.path.join(packages_dir, "curl", "package.manifest"), "w") as f:
+        f.write('[package]\nname="curl"\nversion="8.7.1"\ndependencies=["musl", "openssl"]')
+    with open(os.path.join(packages_dir, "openssl", "package.manifest"), "w") as f:
+        f.write('[package]\nname="openssl"\nversion="3.3.1"')
+
+    graph = DependencyGraph(workspace_root=workspace)
 
     # Assert nodes are successfully parsed from the workspace
     assert len(graph.nodes) > 0
@@ -52,16 +70,18 @@ def test_dependency_graph() -> None:
 
     # Check version constraints
     # zlib is version 1.3.2 in local workspace
-    assert check_version_constraints("zlib", ">=1.0.0", workspace_root="tests/test_data")
-    assert check_version_constraints("zlib", "<2.0.0", workspace_root="tests/test_data")
-    assert check_version_constraints("zlib", "==1.3.2", workspace_root="tests/test_data")
-    assert not check_version_constraints("zlib", "<1.0.0", workspace_root="tests/test_data")
-    assert not check_version_constraints("zlib", ">1.3.2", workspace_root="tests/test_data")
+    assert check_version_constraints("zlib", ">=1.0.0", workspace_root=workspace)
+    assert check_version_constraints("zlib", "<2.0.0", workspace_root=workspace)
+    assert check_version_constraints("zlib", "==1.3.2", workspace_root=workspace)
+    assert not check_version_constraints("zlib", "<1.0.0", workspace_root=workspace)
+    assert not check_version_constraints("zlib", ">1.3.2", workspace_root=workspace)
 
     # Check dependency tree representation
-    tree = build_dependency_tree("zlib", workspace_root="tests/test_data")
+    tree = build_dependency_tree("zlib", workspace_root=workspace)
     assert tree["package"] == "zlib"
     assert any(d["package"] == "musl" for d in tree["dependencies"])
+
+
 
 def test_query_security_feeds() -> None:
     import json
@@ -90,6 +110,7 @@ def test_query_security_feeds() -> None:
 def test_fetch_source_checksum() -> None:
     from app.tools.package_io import fetch_source_checksum
     res = fetch_source_checksum("https://www.google.com/robots.txt")
+    assert res["status"] == "success"
     assert "sha256" in res
     assert len(res["sha256"]) == 64
 
