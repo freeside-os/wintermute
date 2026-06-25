@@ -37,7 +37,8 @@ def create_refiner_agent() -> Agent:
             "present in the package.justfile build target. Ensure that compile/configure commands run inside the correct extracted directory path "
             "(e.g. cd $PKG_NAME-* or cd $PKG_NAME-$PKG_VERSION). Use fetch_source_checksum to calculate SHA-256 checksums for any new or modified package source URLs.\n"
             "After editing the files, print a confirmation message outlining what you changed.\n\n"
-            "Use `search_memory` if you need to recall past packaging rules or successful configurations for similar packages."
+            "Use `search_memory` if you need to recall past packaging rules or successful configurations for similar packages.\n"
+            "When you establish a new packaging rule or standard, immediately explicitly use `save_memory_note` to record the exact standard for future reference."
         ),
         tools=[read_package_file, write_package_file, fetch_source_checksum, search_memory],
     )

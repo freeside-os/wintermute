@@ -36,7 +36,8 @@ def create_triage_agent() -> Agent:
             '  "is_security_update": true or false\n'
             "}\n\n"
             "If the prompt is general conversation, general knowledge, or unrelated to package management/Freeside OS, set action to 'out_of_scope' and pkg_name to null.\n\n"
-            "Use `search_memory` to check past triage history or general system queries if needed."
+            "Use `search_memory` to check past triage history or general system queries if needed.\n"
+            "Use `save_memory_note` to explicitly save any new system configurations, rules, or notable triage history you establish."
         ),
         tools=[list_workspace_packages, list_packages, query_security_feeds, search_memory],
         output_key="triage_output",

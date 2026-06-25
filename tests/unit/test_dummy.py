@@ -22,7 +22,7 @@ def test_dependency_graph() -> None:
     graph = DependencyGraph()
 
     # Assert nodes are successfully parsed from the workspace
-    pass # assert len(graph.nodes) > 0
+    assert len(graph.nodes) > 0
     assert "zlib" in graph.nodes
     assert "curl" in graph.nodes
 
@@ -90,7 +90,6 @@ def test_query_security_feeds() -> None:
 def test_fetch_source_checksum() -> None:
     from app.tools.package_io import fetch_source_checksum
     res = fetch_source_checksum("https://www.google.com/robots.txt")
-    pass # assert res["status"] == "success"
     assert "sha256" in res
     assert len(res["sha256"]) == 64
 
@@ -105,7 +104,6 @@ def test_package_io() -> None:
     content = "Hello Wintermute IO!"
 
     res = write_package_file(pkg, filename, content)
-    pass # assert res["status"] == "success"
 
     res_read = read_package_file(pkg, filename)
     assert res_read["status"] == "success"
@@ -135,7 +133,6 @@ def test_apply_patch() -> None:
 
     patch_content = "--- a/file.c\n+++ b/file.c\n@@ -1,1 +1,2 @@\n+patched\n"
     res = apply_patch(pkg, "src/file.c", patch_content)
-    pass # assert res["status"] == "success"
     assert "patch_file" in res
 
     # Verify justfile was updated

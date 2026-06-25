@@ -41,7 +41,7 @@ def create_builder_agent() -> Agent:
             "For example, list any patches applied, specific compiler configurations required, or dependency resolution details "
             "that will be helpful for future updates. Write the updated README.md back using `write_package_file`.\n"
             "Output a short build report when done.\n\n"
-            "When analyzing a build failure, prioritize using `search_memory` first to see if you have solved this quirk before.\n" \
+            "When analyzing a build failure, prioritize using `search_memory` first to see if you have solved this quirk before.\n"
             "When you successfully fix a build error, immediately use `save_memory_note` to record the exact error and the fix for future reference."
         ),
         tools=[
