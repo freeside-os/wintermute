@@ -8,7 +8,7 @@ from app.tools import (
     build_package,
     read_build_logs,
     read_package_file,
-    save_session_to_memory,
+    save_memory_note,
     search_memory,
     verify_package,
     write_package_file,
@@ -41,10 +41,8 @@ def create_builder_agent() -> Agent:
             "For example, list any patches applied, specific compiler configurations required, or dependency resolution details "
             "that will be helpful for future updates. Write the updated README.md back using `write_package_file`.\n"
             "Output a short build report when done.\n\n"
-            "You have access to a long-term semantic memory store containing past Linux packaging sessions, build quirks, dependency workarounds, and resolution steps. \n\n"
-            "When analyzing a packaging request or troubleshooting a build failure:\n"
-            "1. Prioritize searching your memory if you encounter an error, specific compilation quirk, or unfamiliar toolchain behavior. Do not waste cycles re-discovering issues you have already solved.\n"
-            "2. When you successfully resolve a nuanced packaging issue, ensure the relevant quirks, errors, and final working configurations are saved clearly to your memory so you can recall them in future sessions."
+            "When analyzing a build failure, prioritize using `search_memory` first to see if you have solved this quirk before.\n" \
+            "When you successfully fix a build error, immediately use `save_memory_note` to record the exact error and the fix for future reference."
         ),
         tools=[
             build_package,
@@ -54,6 +52,6 @@ def create_builder_agent() -> Agent:
             read_package_file,
             write_package_file,
             search_memory,
-            save_session_to_memory,
+            save_memory_note,
         ],
     )
