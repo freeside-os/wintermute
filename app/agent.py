@@ -268,6 +268,11 @@ class Workflow(BaseNode):
         async for event in workflow.run_async(ic):
             yield event
 
+        # Print the final token totals
+        input_tokens = state.get("total_input_tokens", 0)
+        output_tokens = state.get("total_output_tokens", 0)
+        print(f"Total tokens sent: {input_tokens}, received: {output_tokens}")
+
 from google.adk.agents.context_cache_config import ContextCacheConfig  # noqa: E402
 from google.adk.apps.app import EventsCompactionConfig  # noqa: E402
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer  # noqa: E402
@@ -275,6 +280,7 @@ from google.adk.plugins.reflect_retry_tool_plugin import (  # noqa: E402
     ReflectAndRetryToolPlugin,
 )
 from .plugins.logging import LoggingPlugin
+from .plugins.tokens import TokenTrackingPlugin
 
 from app.consts import (  # noqa: E402
     COMPACTION_INTERVAL,
@@ -311,5 +317,6 @@ app = App(
     plugins=[
         ReflectAndRetryToolPlugin(max_retries=TOOL_MAX_RETRIES),
         LoggingPlugin(),
+        TokenTrackingPlugin(),
     ]
 )
