@@ -7,9 +7,9 @@ class DependencyGraph:
     """Represents a package dependency graph across the workspace."""
 
     def __init__(self, workspace_root: str | None = None):
-        workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
-        self.workspace_root = workspace_root
-        self.packages_dir = os.path.join(workspace_root, "packages")
+        self.workspace_root = workspace_root or os.environ.get("WORKSPACE_ROOT", os.getcwd())
+        self.packages_dir = os.path.join(self.workspace_root, "packages")
+
         self.nodes = {}  # pkg_name -> manifest_data dict
         self.edges = {}  # pkg_name -> list of dependencies
         self.reverse_graph = {}  # pkg_name -> list of packages depending on it
