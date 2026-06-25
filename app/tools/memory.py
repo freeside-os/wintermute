@@ -1,32 +1,12 @@
 import datetime
+import logging
 
-from google.adk.agents import Agent
+logger = logging.getLogger(__name__)
+
 from google.adk.memory.memory_entry import MemoryEntry
-from google.adk.models import Gemini
 from google.adk.tools import ToolContext
 from google.genai import types
 
-from app.consts import MODEL_MEM_SUMMARY, MODEL_RETRIES
-
-# Define a summarizer agent that acts as a workflow block to extract knowledge
-memory_summarizer_agent = Agent(
-    name="memory_summarizer_agent",
-    # Use flash model for fast and cost-effective summarization
-    model=Gemini(
-        model=MODEL_MEM_SUMMARY,
-        retry_options=types.HttpRetryOptions(attempts=MODEL_RETRIES),
-    ),
-    instruction=(
-        "You are the Memory Summarizer Agent for Freeside OS.\n"
-        "Your task is to analyze the history of a packaging/build session and extract any valuable lessons, "
-        "build quirks, dependency workarounds, or successful compilation configurations.\n"
-        "Guidelines:\n"
-        "1. Let the nature of the issue dictate what information to capture and how to organize it. "
-        "Include relevant error messages, root causes, workarounds, config files, or steps to reproduce/solve.\n"
-        "2. If the session did not encounter any new compilation errors, quirks, or nuance (e.g. it was a simple check or review with no changes), "
-        "return exactly 'NO_KNOWLEDGE_TO_SAVE'. Do not save trivial sessions."
-    )
-)
 
 
 async def search_memory(query: str, tool_context: ToolContext) -> dict:
@@ -41,6 +21,7 @@ async def search_memory(query: str, tool_context: ToolContext) -> dict:
     try:
         res = await tool_context.search_memory(query)
     except Exception as e:
+        logger.error(f"[MEMORY_TRACKING] action=search query=\"{query}\" results_count=0 error=\"{e}\"")
         return {"status": "fallback", "results": [], "message": f"Memory service unavailable: {e}"}
     memories = []
 
@@ -54,48 +35,38 @@ async def search_memory(query: str, tool_context: ToolContext) -> dict:
             "timestamp": m.timestamp,
             "content": text
         })
+
+    logger.info(f"[MEMORY_TRACKING] action=search query=\"{query}\" results_count={len(memories)}")
     return {"status": "success", "results": memories}
 
+async def save_memory_note(note: str, tool_context: ToolContext) -> dict:
+    """Extracts and saves key packaging quirks and solutions to long-term memory.
 
-async def save_session_to_memory(tool_context: ToolContext) -> dict:
-    """Extracts and saves key packaging quirks and solutions from this session to long-term memory.
+    Call this tool explicitly when a packaging milestone is achieved or a compilation quirk/build error is successfully resolved.
 
-    Call this tool when a packaging milestone is achieved or a compilation quirk/build error is successfully resolved.
+    Args:
+        note: The exact error encountered and the precise fix that resolved it.
 
     Returns:
         A dictionary containing the status of the save action.
     """
-    # 1. Format the transcript of the current session
-    texts = []
-    for event in tool_context.session.events:
-        if event.content and event.content.parts:
-            parts_text = [p.text for p in event.content.parts if p.text]
-            if parts_text:
-                texts.append(f"[{event.author}]: {' '.join(parts_text)}")
+    if not note or not note.strip():
+        return {"status": "ignored", "message": "Note is empty."}
 
-    transcript = "\n".join(texts).strip()
-    if not transcript:
-        return {"status": "ignored", "message": "Session is empty."}
-
-    # 2. Run the summarizer agent to let the model extract knowledge open-endedly
-    res = await tool_context.run_node(memory_summarizer_agent, node_input=transcript)
-    summary_text = str(res).strip()
-
-    if "NO_KNOWLEDGE_TO_SAVE" in summary_text:
-        return {"status": "ignored", "message": "No new packaging knowledge detected in this session."}
-
-    # 3. Save the summary directly to memory using the framework's add_memory method
+    # Save the note directly to memory using the framework's add_memory method
     entry = MemoryEntry(
         content=types.Content(
             role="model",
-            parts=[types.Part(text=summary_text)]
+            parts=[types.Part(text=note.strip())]
         ),
-        author="memory_summarizer_agent",
+        author=tool_context.agent_name if hasattr(tool_context, "agent_name") else "unknown_agent",
         timestamp=datetime.datetime.now().isoformat()
     )
 
     try:
         await tool_context.add_memory(memories=[entry])
+        logger.info(f"[MEMORY_TRACKING] action=save note_length={len(note)}")
     except Exception as e:
-        return {"status": "fallback", "message": f"Memory service unavailable: {e}", "summary": summary_text}
-    return {"status": "success", "message": "Session summary saved to memory.", "summary": summary_text}
+        logger.error(f"[MEMORY_TRACKING] action=save note_length={len(note)} error=\"{e}\"")
+        return {"status": "fallback", "message": f"Memory service unavailable: {e}"}
+    return {"status": "success", "message": "Memory note saved."}
