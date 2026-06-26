@@ -4,6 +4,11 @@ import re
 import subprocess
 
 
+def _workspace_root() -> str:
+    """Returns the workspace root, resolved from WINTERMUTE_WORKSPACE_ROOT env var."""
+    return os.environ.get("WINTERMUTE_WORKSPACE_ROOT", "/home/dq/Code/freeside")
+
+
 def verify_package(pkg_name: str) -> dict:
     """Verifies the package recipe and manifest validity.
 
@@ -13,7 +18,7 @@ def verify_package(pkg_name: str) -> dict:
     Returns:
         A dictionary containing the verification status and output.
     """
-    packages_dir = "/home/dq/Code/freeside/packages"
+    packages_dir = os.path.join(_workspace_root(), "packages")
     try:
         res = subprocess.run(
             ["python3", "fspack.py", "verify", pkg_name],
@@ -40,16 +45,18 @@ def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
         A dictionary containing the build status, stdout, and stderr.
     """
     env = os.environ.copy()
-    env["STRAYLIGHT_PACKAGES_ROOT"] = "/home/dq/Code/freeside/packages"
-    env["STRAYLIGHT_BUILDER_ROOT"] = "/home/dq/Code/freeside/build"
-    env["STRAYLIGHT_BUILDER_OUTPUT_ROOT"] = "/home/dq/Code/freeside/build/packages"
+    workspace = _workspace_root()
+    env.setdefault("STRAYLIGHT_PACKAGES_ROOT", os.path.join(workspace, "packages"))
+    env.setdefault("STRAYLIGHT_BUILDER_ROOT", os.path.join(workspace, "build"))
+    env.setdefault("STRAYLIGHT_BUILDER_OUTPUT_ROOT", os.path.join(workspace, "build", "packages"))
+    straylight_bin = os.path.join(workspace, "build", "straylight")
     try:
-        cmd = ["sudo", "-E", "/home/dq/Code/freeside/build/straylight", "build", "--pkg", pkg_name]
+        cmd = ["sudo", "-E", straylight_bin, "build", "--pkg", pkg_name]
         if keep_sandbox:
             cmd.append("--keep-sandbox")
         res = subprocess.run(
             cmd,
-            cwd="/home/dq/Code/freeside",
+            cwd=_workspace_root(),
             env=env,
             capture_output=True,
             text=True
@@ -71,7 +78,7 @@ def read_build_logs(pkg_name: str) -> dict:
     Returns:
         A dictionary with the status, log file name, and log content.
     """
-    log_dir = "/home/dq/Code/freeside/build"
+    log_dir = os.path.join(_workspace_root(), "build")
     log_pattern = os.path.join(log_dir, f"{pkg_name}-*.log")
     log_files = glob.glob(log_pattern)
     if not log_files:

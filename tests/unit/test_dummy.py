@@ -110,10 +110,11 @@ def test_package_io() -> None:
     assert res_read["content"] == content
 
     # Clean up
-    path = f"/home/dq/Code/freeside/packages/{pkg}/{filename}"
+    packages_root = os.path.join(os.environ.get("WINTERMUTE_WORKSPACE_ROOT", "/home/dq/Code/freeside"), "packages")
+    path = os.path.join(packages_root, pkg, filename)
     if os.path.exists(path):
         os.remove(path)
-    pkg_dir = f"/home/dq/Code/freeside/packages/{pkg}"
+    pkg_dir = os.path.join(packages_root, pkg)
     if os.path.exists(pkg_dir):
         try:
             os.rmdir(pkg_dir)
@@ -136,7 +137,8 @@ def test_apply_patch() -> None:
     assert "patch_file" in res
 
     # Verify justfile was updated
-    justfile_path = f"/home/dq/Code/freeside/packages/{pkg}/package.justfile"
+    packages_root = os.path.join(os.environ.get("WINTERMUTE_WORKSPACE_ROOT", "/home/dq/Code/freeside"), "packages")
+    justfile_path = os.path.join(packages_root, pkg, "package.justfile")
     assert os.path.exists(justfile_path)
     with open(justfile_path, encoding="utf-8") as f:
         updated_content = f.read()
@@ -144,16 +146,18 @@ def test_apply_patch() -> None:
     assert "patch -p1 -d src < /workspace/packages/$PKG_NAME/patches/" in updated_content
 
     # Clean up
-    patches_dir = f"/home/dq/Code/freeside/packages/{pkg}/patches"
+    patches_dir = os.path.join(packages_root, pkg, "patches")
     if os.path.exists(patches_dir):
         for f_name in os.listdir(patches_dir):
             os.remove(os.path.join(patches_dir, f_name))
         os.rmdir(patches_dir)
-    os.remove(justfile_path)
-    pkg_dir = f"/home/dq/Code/freeside/packages/{pkg}"
+    if os.path.exists(justfile_path):
+        os.remove(justfile_path)
+    pkg_dir = os.path.join(packages_root, pkg)
     if os.path.exists(pkg_dir):
         try:
             os.rmdir(pkg_dir)
         except Exception:
             pass
+
 

@@ -25,6 +25,10 @@ from app.memory_service import PersistentGeminiMemoryService
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_GENAI_USE_VERTEXAI"),
+    reason="GEMINI_API_KEY not set; skipping memory service test in CI"
+)
 async def test_persistent_gemini_memory_service() -> None:
     # Use a temporary directory for ChromaDB in testing
     test_path = "./chroma_memory_test"
