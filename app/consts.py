@@ -3,8 +3,7 @@ MODEL_TRIAGE = "gemini-3.5-flash"
 MODEL_SCAFFOLD = "gemini-3.5-flash"
 MODEL_REFINER = "gemini-3.5-flash"
 MODEL_BUILDER = "gemini-3.1-pro-preview"
-MODEL_MEM_SUMMARY = "gemini-3.5-flash"
-MODEL_COMPACTION = "gemini-3.5-flash"
+MODEL_COMPACTION = "gemini-3.1-flash-lite"
 MODEL_RETRIES = 3
 
 # --- Context Caching Settings ---

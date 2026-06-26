@@ -80,7 +80,6 @@ class LoggingPlugin(BasePlugin):
     self._log(f"📢 EVENT YIELDED")
     self._log(f"   Author: {event.author}")
     self._log(f"   Content: {self._format_content(event.content)}")
-    self._log(f"   Final Response: {event.is_final_response()}")
 
     if event.get_function_calls():
       func_calls = [fc.name for fc in event.get_function_calls()]
@@ -101,10 +100,6 @@ class LoggingPlugin(BasePlugin):
   ) -> Optional[None]:
     """Log invocation completion."""
     self._log(f"✅ INVOCATION COMPLETED")
-    self._log(
-        "   Final Agent:"
-        f" {invocation_context.agent.name if hasattr(invocation_context.agent, 'name') else 'Unknown'}"
-    )
     return None
 
   @override
@@ -132,7 +127,7 @@ class LoggingPlugin(BasePlugin):
       self, *, callback_context: CallbackContext, llm_request: LlmRequest
   ) -> Optional[LlmResponse]:
     """Log LLM request before sending to model."""
-    self._log(f"🧠 LLM REQUEST")
+    self._log(f"💭 LLM REQUEST")
     self._log(f"   Model: {llm_request.model or 'default'}")
     self._log(f"   Agent: {callback_context.agent_name}")
 
@@ -148,7 +143,7 @@ class LoggingPlugin(BasePlugin):
       self, *, callback_context: CallbackContext, llm_response: LlmResponse
   ) -> Optional[LlmResponse]:
     """Log LLM response after receiving from model."""
-    self._log(f"🧠 LLM RESPONSE")
+    self._log(f"💭 LLM RESPONSE")
     self._log(f"   Agent: {callback_context.agent_name}")
 
     if llm_response.error_code:
@@ -237,7 +232,7 @@ class LoggingPlugin(BasePlugin):
       error: Exception,
   ) -> Optional[LlmResponse]:
     """Log LLM error."""
-    self._log(f"🧠 LLM ERROR")
+    self._log(f"⛔ LLM ERROR")
     self._log(f"   Agent: {callback_context.agent_name}")
     self._log(f"   Error: {error}")
 
@@ -262,7 +257,7 @@ class LoggingPlugin(BasePlugin):
     return None
 
   def _log(self, message: str) -> None:
-    self.logger.info(f"[{self.name}] {message}")
+    self.logger.info(message)
 
   def _format_content(
       self, content: Optional[types.Content], max_length: int = 200
