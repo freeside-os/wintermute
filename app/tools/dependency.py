@@ -2,17 +2,15 @@ import os
 import re
 import tomllib
 
-
-def _workspace_root() -> str:
-    """Returns the workspace root, resolved from WINTERMUTE_WORKSPACE_ROOT env var."""
-    return os.environ.get("WINTERMUTE_WORKSPACE_ROOT", "/home/dq/Code/freeside")
+from app.app_utils.paths import packages_root as get_packages_root
+from app.app_utils.paths import workspace_root as get_workspace_root
 
 
 class DependencyGraph:
     """Represents a package dependency graph across the workspace."""
 
     def __init__(self, workspace_root: str | None = None):
-        self.workspace_root = workspace_root or _workspace_root()
+        self.workspace_root = workspace_root or get_workspace_root()
         self.packages_dir = os.path.join(self.workspace_root, "packages")
         self.nodes = {}  # pkg_name -> manifest_data dict
         self.edges = {}  # pkg_name -> list of dependencies
@@ -188,7 +186,7 @@ def check_version_constraints(pkg_name: str, constraint: str, workspace_root: st
     Returns:
         True if the current package version satisfies the constraints, False otherwise.
     """
-    manifest_path = os.path.join(workspace_root or _workspace_root(), "packages", pkg_name, "package.manifest")
+    manifest_path = os.path.join(workspace_root or get_workspace_root(), "packages", pkg_name, "package.manifest")
     if not os.path.exists(manifest_path):
         return False
 
@@ -237,7 +235,7 @@ def build_dependency_tree(pkg_name: str, workspace_root: str | None = None) -> d
     Returns:
         A dictionary representation of the dependency tree.
     """
-    graph = DependencyGraph(workspace_root=workspace_root or _workspace_root())
+    graph = DependencyGraph(workspace_root=workspace_root or get_workspace_root())
     visited = set()
 
     def walk(node: str) -> dict:

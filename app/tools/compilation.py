@@ -3,10 +3,7 @@ import os
 import re
 import subprocess
 
-
-def _workspace_root() -> str:
-    """Returns the workspace root, resolved from WINTERMUTE_WORKSPACE_ROOT env var."""
-    return os.environ.get("WINTERMUTE_WORKSPACE_ROOT", "/home/dq/Code/freeside")
+from app.app_utils.paths import workspace_root as get_workspace_root
 
 
 def verify_package(pkg_name: str) -> dict:
@@ -18,7 +15,7 @@ def verify_package(pkg_name: str) -> dict:
     Returns:
         A dictionary containing the verification status and output.
     """
-    packages_dir = os.path.join(_workspace_root(), "packages")
+    packages_dir = os.path.join(get_workspace_root(), "packages")
     try:
         res = subprocess.run(
             ["python3", "fspack.py", "verify", pkg_name],
@@ -45,7 +42,7 @@ def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
         A dictionary containing the build status, stdout, and stderr.
     """
     env = os.environ.copy()
-    workspace = _workspace_root()
+    workspace = get_workspace_root()
     env.setdefault("STRAYLIGHT_PACKAGES_ROOT", os.path.join(workspace, "packages"))
     env.setdefault("STRAYLIGHT_BUILDER_ROOT", os.path.join(workspace, "build"))
     env.setdefault("STRAYLIGHT_BUILDER_OUTPUT_ROOT", os.path.join(workspace, "build", "packages"))
@@ -56,7 +53,7 @@ def build_package(pkg_name: str, keep_sandbox: bool = False) -> dict:
             cmd.append("--keep-sandbox")
         res = subprocess.run(
             cmd,
-            cwd=_workspace_root(),
+            cwd=get_workspace_root(),
             env=env,
             capture_output=True,
             text=True
@@ -78,7 +75,7 @@ def read_build_logs(pkg_name: str) -> dict:
     Returns:
         A dictionary with the status, log file name, and log content.
     """
-    log_dir = os.path.join(_workspace_root(), "build")
+    log_dir = os.path.join(get_workspace_root(), "build")
     log_pattern = os.path.join(log_dir, f"{pkg_name}-*.log")
     log_files = glob.glob(log_pattern)
     if not log_files:
