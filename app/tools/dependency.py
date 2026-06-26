@@ -2,13 +2,16 @@ import os
 import re
 import tomllib
 
+from app.app_utils.paths import packages_root as get_packages_root
+from app.app_utils.paths import workspace_root as get_workspace_root
+
 
 class DependencyGraph:
     """Represents a package dependency graph across the workspace."""
 
-    def __init__(self, workspace_root: str = "/home/dq/Code/freeside"):
-        self.workspace_root = workspace_root
-        self.packages_dir = os.path.join(workspace_root, "packages")
+    def __init__(self, workspace_root: str | None = None):
+        self.workspace_root = workspace_root or get_workspace_root()
+        self.packages_dir = os.path.join(self.workspace_root, "packages")
         self.nodes = {}  # pkg_name -> manifest_data dict
         self.edges = {}  # pkg_name -> list of dependencies
         self.reverse_graph = {}  # pkg_name -> list of packages depending on it
@@ -172,7 +175,7 @@ def _parse_version(ver_str: str) -> tuple:
     return tuple(parts)
 
 
-def check_version_constraints(pkg_name: str, constraint: str, workspace_root: str = "/home/dq/Code/freeside") -> bool:
+def check_version_constraints(pkg_name: str, constraint: str, workspace_root: str | None = None) -> bool:
     """Helper tool to check version constraints.
 
     Args:
@@ -183,7 +186,7 @@ def check_version_constraints(pkg_name: str, constraint: str, workspace_root: st
     Returns:
         True if the current package version satisfies the constraints, False otherwise.
     """
-    manifest_path = os.path.join(workspace_root, "packages", pkg_name, "package.manifest")
+    manifest_path = os.path.join(workspace_root or get_workspace_root(), "packages", pkg_name, "package.manifest")
     if not os.path.exists(manifest_path):
         return False
 
@@ -222,7 +225,7 @@ def check_version_constraints(pkg_name: str, constraint: str, workspace_root: st
     return False
 
 
-def build_dependency_tree(pkg_name: str, workspace_root: str = "/home/dq/Code/freeside") -> dict:
+def build_dependency_tree(pkg_name: str, workspace_root: str | None = None) -> dict:
     """Helper tool to build dependency trees.
 
     Args:
@@ -232,7 +235,7 @@ def build_dependency_tree(pkg_name: str, workspace_root: str = "/home/dq/Code/fr
     Returns:
         A dictionary representation of the dependency tree.
     """
-    graph = DependencyGraph(workspace_root=workspace_root)
+    graph = DependencyGraph(workspace_root=workspace_root or get_workspace_root())
     visited = set()
 
     def walk(node: str) -> dict:

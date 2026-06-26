@@ -1,27 +1,51 @@
 # wintermute
 
-Simple ReAct agent
-Agent generated with `agents-cli` version `0.5.0`
+Wintermute is the AI-powered packaging agent for the Freeside OS distribution. It automates package creation, maintenance, security auditing, and build diagnostics using Google Gemini.
 
 ## Project Structure
 
 ```
 wintermute/
-├── app/         # Core agent code
-│   ├── agent.py               # Main agent logic
-│   └── app_utils/             # App utilities and helpers
-├── tests/                     # Unit, integration, and load tests
-├── GEMINI.md                  # AI-assisted development guide
-└── pyproject.toml             # Project dependencies
+├── app/                           # Core agent code
+│   ├── agent.py                   # Main agent logic and tool registration
+│   ├── app_utils/                 # Shared utilities (retry, path resolution)
+│   ├── tools/                     # Agent tools (package I/O, dependency graph, compilation)
+│   ├── agents/                    # Sub-agents (builder, reviewer, etc.)
+│   └── workflows/                 # Orchestration workflows
+├── tests/                         # Unit, integration, and eval tests
+├── .env.example                   # Template for required environment variables
+└── pyproject.toml                 # Project dependencies
 ```
 
-> 💡 **Tip:** Use [Gemini CLI](https://github.com/google-gemini/gemini-cli) for AI-assisted development - project context is pre-configured in `GEMINI.md`.
+> 💡 **Tip:** Use [Gemini CLI](https://github.com/google-gemini/gemini-cli) for AI-assisted development — project context is pre-configured in `GEMINI.md`.
 
 ## Requirements
 
 Before you begin, ensure you have:
-- **uv**: Python package manager - [Install](https://docs.astral.sh/uv/getting-started/installation/)
-- **just**: Command runner - [Install](https://github.com/casey/just)
+- **uv**: Python package manager — [Install](https://docs.astral.sh/uv/getting-started/installation/)
+- **just**: Command runner — [Install](https://github.com/casey/just)
+
+## Environment Configuration
+
+Wintermute uses [python-dotenv](https://pypi.org/project/python-dotenv/) and loads `.env` automatically on startup. **Both variables below are required** — the agent will raise an error at startup if either is missing.
+
+1. Copy the example file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Fill in the values:
+
+   | Variable | Description |
+   |---|---|
+   | `GEMINI_API_KEY` | Your Google Gemini API key ([get one here](https://aistudio.google.com/apikey)) |
+   | `WINTERMUTE_WORKSPACE_ROOT` | Absolute path to the root of your local Freeside workspace (the directory containing `packages/`) |
+
+   Example `.env`:
+   ```dotenv
+   GEMINI_API_KEY=AIza...
+   WINTERMUTE_WORKSPACE_ROOT=/home/yourname/Code/freeside
+   ```
 
 ## Quick Start
 
@@ -68,20 +92,22 @@ Edit the agent logic directly in `app/agent.py`. The local session database, art
 You can run Wintermute inside a Docker container while sharing the host workspace filesystem. To prevent permission mismatches (e.g. files created inside the container being owned by `root` on the host), run the container using the host user's UID and GID:
 
 ### 1. Build the Docker Image
-From the `wintermute` directory, build the image:
+From the `wintermute` directory:
 ```bash
 docker build -t wintermute .
 ```
 
-### 2. Run the Container (Mounted FS & User Matched)
-Mount the main `freeside` workspace directory into the container at the same absolute path `/home/dq/Code/freeside`. Pass the environment keys (e.g. `GEMINI_API_KEY`):
+### 2. Run the Container
+
+Mount the Freeside workspace directory into the container and pass your environment variables:
 
 ```bash
 docker run -it --rm \
   --user "$(id -u):$(id -g)" \
-  -v "/home/dq/Code/freeside:/home/dq/Code/freeside" \
-  -w "/home/dq/Code/freeside/wintermute" \
+  -v "$WINTERMUTE_WORKSPACE_ROOT:$WINTERMUTE_WORKSPACE_ROOT" \
+  -w "$WINTERMUTE_WORKSPACE_ROOT/wintermute" \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
+  -e WINTERMUTE_WORKSPACE_ROOT="$WINTERMUTE_WORKSPACE_ROOT" \
   wintermute uv run adk run app "Review package zlib"
 ```
 
