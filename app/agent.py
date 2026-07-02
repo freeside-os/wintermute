@@ -37,6 +37,7 @@ elif os.environ.get("GOOGLE_API_KEY") and not os.environ.get("GEMINI_API_KEY"):
 # 1. Importer / Triage Agent
 # ------------------------------------------------------------------------------
 from app.agents import (  # noqa: E402
+    create_audit_agent,
     create_builder_agent,
     create_refiner_agent,
     create_scaffold_agent,
@@ -47,6 +48,7 @@ triage_agent = create_triage_agent()
 refiner_agent = create_refiner_agent()
 builder_agent = create_builder_agent()
 scaffold_agent = create_scaffold_agent()
+audit_agent = create_audit_agent()
 
 # ------------------------------------------------------------------------------
 # 4. Master Workflow Coordinator
@@ -58,6 +60,7 @@ class Workflow(BaseNode):
     refiner_agent: Agent
     builder_agent: Agent
     scaffold_agent: Agent
+    audit_agent: Agent
 
     async def _run_impl(
         self,
@@ -131,7 +134,17 @@ class Workflow(BaseNode):
                     if ev.author == "user" and ev.content and ev.content.parts:
                         user_query = ev.content.parts[0].text
                         break
-                if "security" in user_query.lower() or "cve" in user_query.lower():
+                if "upgrade audit" in user_query.lower():
+                    action = "upgrade_audit"
+                    if "all" in user_query.lower():
+                        pkg_name = "all"
+                    else:
+                        pkg_match = re.search(r"(?:upgrade audit)\s+(?:package\s+)?([a-zA-Z0-9_\-]+)", user_query, re.IGNORECASE)
+                        if pkg_match:
+                            pkg_name = pkg_match.group(1)
+                        else:
+                            pkg_name = state.get("pkg_name") or "all"
+                elif "security" in user_query.lower() or "cve" in user_query.lower():
                     action = "security_audit"
                     pkg_name = "all"
                 elif "review" in user_query.lower() or "check" in user_query.lower() or "enforce" in user_query.lower():
@@ -209,7 +222,7 @@ class Workflow(BaseNode):
             except Exception:
                 pass
 
-        if action == "out_of_scope" or (not pkg_name and action != "security_audit"):
+        if action == "out_of_scope" or (not pkg_name and action not in ("security_audit", "upgrade_audit")):
             yield Event(
                 author=self.name,
                 content=types.Content(
@@ -220,7 +233,13 @@ class Workflow(BaseNode):
             return
 
         # Route to appropriate workflow subclass
-        if action == "security_audit":
+        if action == "upgrade_audit":
+            from app.workflows.upgrade_audit import UpgradeAuditWorkflow
+            workflow = UpgradeAuditWorkflow(
+                name="upgrade_audit_workflow",
+                audit_agent=self.audit_agent
+            )
+        elif action == "security_audit":
             from app.workflows.security import SecurityWorkflow
             workflow = SecurityWorkflow(
                 name="security_workflow",
@@ -298,7 +317,8 @@ root_agent = Workflow(
     triage_agent=triage_agent,
     refiner_agent=refiner_agent,
     builder_agent=builder_agent,
-    scaffold_agent=scaffold_agent
+    scaffold_agent=scaffold_agent,
+    audit_agent=audit_agent
 )
 
 app = App(

@@ -61,7 +61,8 @@ async def test_workflow_package_override_if_exists() -> None:
         triage_agent=triage_mock,
         refiner_agent=refiner_mock,
         builder_agent=builder_mock,
-        scaffold_agent=scaffold_mock
+        scaffold_agent=scaffold_mock,
+        audit_agent=Agent(name="audit", model=dummy_model, instruction="")
     )
 
     mock_ic = MagicMock()
