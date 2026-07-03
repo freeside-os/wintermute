@@ -2,7 +2,6 @@ import os
 import re
 import tomllib
 
-from app.app_utils.paths import packages_root as get_packages_root
 from app.app_utils.paths import workspace_root as get_workspace_root
 
 

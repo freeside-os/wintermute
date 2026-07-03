@@ -1,11 +1,8 @@
 """Unit test configuration: sets up a temporary workspace with fixture packages."""
 
 import os
-import shutil
-import tempfile
 
 import pytest
-
 
 # Minimal package manifests required by test_dependency_graph assertions.
 FIXTURE_PACKAGES = {

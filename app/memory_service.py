@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
@@ -55,7 +56,7 @@ class PersistentGeminiMemoryService(BaseMemoryService):
         )
 
     async def add_session_to_memory(self, session: Session) -> None:
-        """Extract text from session events, combine it, and upsert it into ChromaDB."""
+        """Extract text from session events, combine it, summarize using Gemini, and upsert it into ChromaDB."""
         texts = []
         for event in session.events:
             if event.content and event.content.parts:
@@ -67,6 +68,29 @@ class PersistentGeminiMemoryService(BaseMemoryService):
         if not combined_text:
             return
 
+        summary_text = None
+        try:
+            if not os.environ.get("GOOGLE_API_KEY") and os.environ.get("GEMINI_API_KEY"):
+                os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
+
+            from google import genai
+            client = genai.Client()
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=(
+                    "Summarize the following compilation/packaging session events to extract: "
+                    "package name, the exact error encountered, and the resolution patch/flags. "
+                    "Keep the summary concise and focused on the key solution.\n\n"
+                    f"Session Events:\n{combined_text}"
+                )
+            )
+            summary_text = response.text
+        except Exception:
+            pass
+
+        if not summary_text:
+            summary_text = combined_text[:1000]
+
         metadata = {
             "app_name": session.app_name,
             "user_id": session.user_id,
@@ -75,7 +99,7 @@ class PersistentGeminiMemoryService(BaseMemoryService):
 
         self.collection.upsert(
             ids=[session.id],
-            documents=[combined_text],
+            documents=[summary_text],
             metadatas=[metadata]
         )
 
@@ -105,7 +129,7 @@ class PersistentGeminiMemoryService(BaseMemoryService):
             if custom_metadata:
                 metadata.update(custom_metadata)
 
-            mem_id = m.id or f"mem_{os.urandom(8).hex()}"
+            mem_id = m.id or f"mem_{hashlib.sha256(doc_text.encode('utf-8')).hexdigest()[:16]}"
 
             self.collection.upsert(
                 ids=[mem_id],

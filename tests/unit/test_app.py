@@ -1,6 +1,5 @@
-from app.plugins.logging import LoggingPlugin
-
 from app.agent import app
+from app.plugins.logging import LoggingPlugin
 
 
 def test_app_plugins() -> None:

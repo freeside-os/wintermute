@@ -1,8 +1,9 @@
-from typing import Optional
-from typing_extensions import override
-from google.adk.plugins.base_plugin import BasePlugin
+
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_response import LlmResponse
+from google.adk.plugins.base_plugin import BasePlugin
+from typing_extensions import override
+
 
 class TokenTrackingPlugin(BasePlugin):
     def __init__(self):
@@ -11,7 +12,7 @@ class TokenTrackingPlugin(BasePlugin):
     @override
     async def after_model_callback(
         self, *, callback_context: CallbackContext, llm_response: LlmResponse
-    ) -> Optional[LlmResponse]:
+    ) -> LlmResponse | None:
         if llm_response.usage_metadata:
             ic = callback_context._invocation_context
             state = ic.session.state

@@ -89,7 +89,7 @@ def test_package_io() -> None:
     filename = "test_io.txt"
     content = "Hello Wintermute IO!"
 
-    res = write_package_file(pkg, filename, content)
+    write_package_file(pkg, filename, content)
 
     res_read = read_package_file(pkg, filename)
     assert res_read["status"] == "success"

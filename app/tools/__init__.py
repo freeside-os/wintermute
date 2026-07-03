@@ -1,6 +1,7 @@
 from app.tools.compilation import (
     build_package,
     read_build_logs,
+    scan_build_log,
     verify_package,
 )
 from app.tools.dependency import (
@@ -25,6 +26,12 @@ from app.tools.package_io import (
     upgrade_package_version,
     write_package_file,
 )
+from app.tools.search import (
+    search_packaging_resources,
+)
+from app.tools.status import (
+    update_task_status,
+)
 
 __all__ = [
     "DependencyGraph",
@@ -40,8 +47,12 @@ __all__ = [
     "read_build_logs",
     "read_package_file",
     "save_memory_note",
+    "scan_build_log",
     "search_memory",
+    "search_packaging_resources",
+    "update_task_status",
     "upgrade_package_version",
     "verify_package",
     "write_package_file",
 ]
+

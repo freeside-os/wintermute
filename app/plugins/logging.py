@@ -1,21 +1,18 @@
 
 from __future__ import annotations
 
-from typing import Any
-from typing import Optional
-from typing import TYPE_CHECKING
-
-from google.genai import types
-from typing_extensions import override
+from typing import TYPE_CHECKING, Any
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.events.event import Event
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
-from google.adk.plugins.base_plugin import BasePlugin
+from google.genai import types
+from typing_extensions import override
 
 if TYPE_CHECKING:
   from google.adk.agents.invocation_context import InvocationContext
@@ -47,9 +44,9 @@ class LoggingPlugin(BasePlugin):
       *,
       invocation_context: InvocationContext,
       user_message: types.Content,
-  ) -> Optional[types.Content]:
+  ) -> types.Content | None:
     """Log user message and invocation start."""
-    self._log(f"🚀 USER MESSAGE RECEIVED")
+    self._log("🚀 USER MESSAGE RECEIVED")
     self._log(f"   Session ID: {invocation_context.session.id}")
     self._log(
         "   Root Agent:"
@@ -63,9 +60,9 @@ class LoggingPlugin(BasePlugin):
   @override
   async def before_run_callback(
       self, *, invocation_context: InvocationContext
-  ) -> Optional[types.Content]:
+  ) -> types.Content | None:
     """Log invocation start."""
-    self._log(f"🏃 INVOCATION STARTING")
+    self._log("🏃 INVOCATION STARTING")
     self._log(
         "   Starting Agent:"
         f" {invocation_context.agent.name if hasattr(invocation_context.agent, 'name') else 'Unknown'}"
@@ -75,9 +72,9 @@ class LoggingPlugin(BasePlugin):
   @override
   async def on_event_callback(
       self, *, invocation_context: InvocationContext, event: Event
-  ) -> Optional[Event]:
+  ) -> Event | None:
     """Log events yielded from the runner."""
-    self._log(f"📢 EVENT YIELDED")
+    self._log("📢 EVENT YIELDED")
     self._log(f"   Author: {event.author}")
     self._log(f"   Content: {self._format_content(event.content)}")
 
@@ -97,17 +94,18 @@ class LoggingPlugin(BasePlugin):
   @override
   async def after_run_callback(
       self, *, invocation_context: InvocationContext
-  ) -> Optional[None]:
+  ) -> None:
     """Log invocation completion."""
-    self._log(f"✅ INVOCATION COMPLETED")
+    self._log("✅ INVOCATION COMPLETED")
     return None
+
 
   @override
   async def before_agent_callback(
       self, *, agent: BaseAgent, callback_context: CallbackContext
-  ) -> Optional[types.Content]:
+  ) -> types.Content | None:
     """Log agent execution start."""
-    self._log(f"🤖 AGENT STARTING")
+    self._log("🤖 AGENT STARTING")
     self._log(f"   Agent Name: {callback_context.agent_name}")
     if callback_context._invocation_context.branch:
       self._log(f"   Branch: {callback_context._invocation_context.branch}")
@@ -116,18 +114,18 @@ class LoggingPlugin(BasePlugin):
   @override
   async def after_agent_callback(
       self, *, agent: BaseAgent, callback_context: CallbackContext
-  ) -> Optional[types.Content]:
+  ) -> types.Content | None:
     """Log agent execution completion."""
-    self._log(f"🤖 AGENT COMPLETED")
+    self._log("🤖 AGENT COMPLETED")
     self._log(f"   Agent Name: {callback_context.agent_name}")
     return None
 
   @override
   async def before_model_callback(
       self, *, callback_context: CallbackContext, llm_request: LlmRequest
-  ) -> Optional[LlmResponse]:
+  ) -> LlmResponse | None:
     """Log LLM request before sending to model."""
-    self._log(f"💭 LLM REQUEST")
+    self._log("💭 LLM REQUEST")
     self._log(f"   Model: {llm_request.model or 'default'}")
     self._log(f"   Agent: {callback_context.agent_name}")
 
@@ -141,9 +139,9 @@ class LoggingPlugin(BasePlugin):
   @override
   async def after_model_callback(
       self, *, callback_context: CallbackContext, llm_response: LlmResponse
-  ) -> Optional[LlmResponse]:
+  ) -> LlmResponse | None:
     """Log LLM response after receiving from model."""
-    self._log(f"💭 LLM RESPONSE")
+    self._log("💭 LLM RESPONSE")
     self._log(f"   Agent: {callback_context.agent_name}")
 
     if llm_response.error_code:
@@ -197,7 +195,7 @@ class LoggingPlugin(BasePlugin):
       tool: BaseTool,
       tool_args: dict[str, Any],
       tool_context: ToolContext,
-  ) -> Optional[dict]:
+  ) -> dict | None:
     """Log tool execution start."""
     prefix = self._get_tool_prefix(tool)
     self._log(f"{prefix} STARTING")
@@ -214,7 +212,7 @@ class LoggingPlugin(BasePlugin):
       tool_args: dict[str, Any],
       tool_context: ToolContext,
       result: dict,
-  ) -> Optional[dict]:
+  ) -> dict | None:
     """Log tool execution completion."""
     prefix = self._get_tool_prefix(tool)
     self._log(f"{prefix} COMPLETED")
@@ -230,9 +228,9 @@ class LoggingPlugin(BasePlugin):
       callback_context: CallbackContext,
       llm_request: LlmRequest,
       error: Exception,
-  ) -> Optional[LlmResponse]:
+  ) -> LlmResponse | None:
     """Log LLM error."""
-    self._log(f"⛔ LLM ERROR")
+    self._log("⛔ LLM ERROR")
     self._log(f"   Agent: {callback_context.agent_name}")
     self._log(f"   Error: {error}")
 
@@ -246,7 +244,7 @@ class LoggingPlugin(BasePlugin):
       tool_args: dict[str, Any],
       tool_context: ToolContext,
       error: Exception,
-  ) -> Optional[dict]:
+  ) -> dict | None:
     """Log tool error."""
     prefix = self._get_tool_prefix(tool)
     self._log(f"{prefix} ERROR")
@@ -260,7 +258,7 @@ class LoggingPlugin(BasePlugin):
     self.logger.info(message)
 
   def _format_content(
-      self, content: Optional[types.Content], max_length: int = 200
+      self, content: types.Content | None, max_length: int = 200
   ) -> str:
     """Format content for logging, truncating if too long."""
     if not content or not content.parts:

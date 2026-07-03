@@ -13,7 +13,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"google\.
 # Suppress warnings from google.genai logger (e.g. AFC warnings when mixing tool types)
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 
-import google.auth  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 from google.adk.agents import Agent, Context  # noqa: E402
 from google.adk.apps import App  # noqa: E402
@@ -82,6 +81,36 @@ class Workflow(BaseNode):
             async for event in wf.run_async(ic):
                 yield event
             return
+
+        # Check if we are waiting for operator fix suggestion input
+        if state.get("pending_fix_input"):
+            from app.workflows.fix import FixWorkflow
+            wf = FixWorkflow(
+                name="fix_router",
+                refiner_agent=self.refiner_agent,
+                builder_agent=self.builder_agent
+            )
+            last_event = ic.session.events[-1]
+            if last_event.author == "user" and last_event.content and last_event.content.parts:
+                suggestion = last_event.content.parts[0].text
+                if suggestion.lower().strip() == "abort":
+                    state["pending_fix_input"] = False
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part(text="Fix workflow aborted by operator.")]
+                        )
+                    )
+                    return
+                else:
+                    state["pending_fix_input"] = False
+                    state["operator_suggestion"] = suggestion
+
+            async for event in wf.run_async(ic):
+                yield event
+            return
+
 
         # Step 1: Run Triage Agent if not already done
         if not state.get("triage_done"):
@@ -298,8 +327,6 @@ from google.adk.apps.llm_event_summarizer import LlmEventSummarizer  # noqa: E40
 from google.adk.plugins.reflect_retry_tool_plugin import (  # noqa: E402
     ReflectAndRetryToolPlugin,
 )
-from .plugins.logging import LoggingPlugin
-from .plugins.tokens import TokenTrackingPlugin
 
 from app.consts import (  # noqa: E402
     COMPACTION_INTERVAL,
@@ -310,6 +337,9 @@ from app.consts import (  # noqa: E402
     MODEL_COMPACTION,
     TOOL_MAX_RETRIES,
 )
+
+from .plugins.logging import LoggingPlugin  # noqa: E402
+from .plugins.tokens import TokenTrackingPlugin  # noqa: E402
 
 # Instantiate root Workflow coordinator agent
 root_agent = Workflow(

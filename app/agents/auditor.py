@@ -3,8 +3,8 @@ from google.adk.models import Gemini
 from google.adk.tools import google_search
 from google.genai import types
 
-from app.consts import MODEL_RETRIES, MODEL_SCAFFOLD
 from app.agents.scaffolder import fix_mixed_tools_callback
+from app.consts import MODEL_RETRIES, MODEL_SCAFFOLD
 
 
 def create_audit_agent() -> Agent:

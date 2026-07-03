@@ -53,7 +53,7 @@ class UpgradeAuditWorkflow(BaseAgent):
 
                     if target_pkg == "all" or target_pkg == name or target_pkg == group or target_group == group:
                         target_pkgs.append({"name": name, "version": version, "group": group})
-                except Exception as e:
+                except Exception:
                     pass
 
         if not target_pkgs:

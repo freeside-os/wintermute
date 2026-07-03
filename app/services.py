@@ -45,6 +45,7 @@ get_service_registry().register_artifact_service("artifact", artifacts_factory)
 # Monkeypatch ADK service factories to use our registered custom services by default when no command-line URIs are provided.
 try:
     import sys
+
     import google.adk.cli.utils.service_factory as sf
 
     # 1. Define wrapped versions of the factory functions

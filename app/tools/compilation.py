@@ -129,3 +129,115 @@ def parse_compiler_errors(log_content: str) -> str:
         return "No specific error patterns matched. Showing last 100 lines of log:\n" + "\n".join(fallback_lines)
     return "\n".join(matched_lines)
 
+
+def scan_build_log(pkg_name: str) -> dict:
+    """Retrieves build logs for a package and scans for known compile/link failure signatures.
+
+    Proposes the exact patch or env injection depending on the match.
+
+    Args:
+        pkg_name: Name of the package to scan.
+
+    Returns:
+        A dictionary with the scan status, signature name, and proposed fix.
+    """
+    res = read_build_logs(pkg_name)
+    if res.get("status") != "success":
+        return {
+            "status": "error",
+            "message": f"Could not retrieve build logs: {res.get('message', 'Unknown error')}"
+        }
+
+    content = res.get("content", "")
+    content_lower = content.lower()
+
+    # Define signatures and proposals
+    # 1. Redefined inline functions
+    if "redefinition of" in content_lower and "inline" in content_lower:
+        return {
+            "status": "success",
+            "signature": "redefined_inline",
+            "proposal": {
+                "type": "env_injection",
+                "env": {
+                    "CFLAGS": "-fcommon"
+                },
+                "message": "Detected redefinition of inline functions. Proposing CFLAGS='-fcommon' injection."
+            }
+        }
+
+    # 2. Missing argp-standalone
+    if "cannot find -largp" in content_lower or "argp.h" in content_lower or "largp" in content_lower or "argp-standalone" in content_lower:
+        return {
+            "status": "success",
+            "signature": "missing_argp",
+            "proposal": {
+                "type": "env_injection",
+                "env": {
+                    "LDFLAGS": "-largp"
+                },
+                "message": "Detected missing argp-standalone link/header failure. Proposing LDFLAGS='-largp' injection."
+            }
+        }
+
+    # 3. Missing doc tools like makeinfo
+    if "makeinfo: command not found" in content_lower or "makeinfo: not found" in content_lower or "makeinfo" in content_lower:
+        return {
+            "status": "success",
+            "signature": "missing_makeinfo",
+            "proposal": {
+                "type": "env_injection",
+                "env": {
+                    "MAKEINFO": "true"
+                },
+                "message": "Detected missing makeinfo doc tool. Proposing MAKEINFO='true' environment injection."
+            }
+        }
+
+    try:
+        from app.memory_service import PersistentGeminiMemoryService
+        import asyncio
+        chroma_path = os.path.join(get_workspace_root(), ".adk", "chroma_memory")
+        memory_service = PersistentGeminiMemoryService(path=chroma_path)
+
+        async def do_query():
+            return await memory_service.search_memory(
+                query=content[-1000:],
+                limit=1
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                results = pool.submit(asyncio.run, do_query()).result()
+        else:
+            results = asyncio.run(do_query())
+
+        if results:
+            match = results[0]
+            workaround_text = ""
+            if match.content and match.content.parts:
+                workaround_text = " ".join([p.text for p in match.content.parts if p.text])
+            return {
+                "status": "success",
+                "signature": "semantic_kb_match",
+                "proposal": {
+                    "type": "semantic_note",
+                    "message": workaround_text
+                }
+            }
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "signature": None,
+        "proposal": None
+    }
+
+
