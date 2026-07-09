@@ -1,7 +1,12 @@
 from google.adk.agents import Agent
 from google.adk.workflow import Workflow
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
+from app.agents import (
+    create_builder_agent,
+    create_refiner_agent,
+    create_scaffold_agent,
+)
 from app.agents.nodes import (
     auto_heal_step,
     compile_step,
@@ -13,9 +18,9 @@ from app.agents.nodes import (
 class CreateWorkflow(Workflow):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    scaffold_agent: Agent
-    refiner_agent: Agent
-    builder_agent: Agent
+    scaffold_agent: Agent = Field(default_factory=create_scaffold_agent)
+    refiner_agent: Agent = Field(default_factory=create_refiner_agent)
+    builder_agent: Agent = Field(default_factory=create_builder_agent)
 
     def model_post_init(self, context) -> None:
         self.edges = [

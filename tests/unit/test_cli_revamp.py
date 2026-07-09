@@ -7,6 +7,19 @@ from app.tools.compilation import scan_build_log
 from app.tools.status import update_task_status
 
 # ------------------------------------------------------------------------------
+# Mock Async Event Generator
+# ------------------------------------------------------------------------------
+
+async def mock_run_async(*args, **kwargs):
+    from google.adk.events import Event
+    from google.genai import types
+    yield Event(
+        author="workflow",
+        content=types.Content(parts=[types.Part.from_text(text="Mocked workflow execution")])
+    )
+
+
+# ------------------------------------------------------------------------------
 # 1. Test Status Tool
 # ------------------------------------------------------------------------------
 
@@ -109,21 +122,24 @@ def test_cli_check_single_package() -> None:
 def test_cli_import_package_arch() -> None:
     runner = CliRunner()
 
-    with patch("app.use_cases.pkgbuild_exists_on_arch", return_value=True), \
+    with patch("app.cli.pkgbuild_exists_on_arch", return_value=True), \
          patch("app.use_cases.import_pkgbuild", return_value={"status": "success"}), \
-         patch("app.use_cases.run_workflow_sync", return_value={}) as mock_run:
+         patch("app.use_cases.Runner") as mock_runner_cls:
+
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run_async = mock_run_async
 
         result = runner.invoke(cli, ["import", "test-pkg"])
         assert result.exit_code == 0
         assert "Importing PKGBUILD for package 'test-pkg'..." in result.output
         assert "Routing 'test-pkg' to refinement and sandbox build..." in result.output
-        mock_run.assert_called_once()
+        mock_runner_cls.assert_called_once()
 
 
 def test_cli_import_package_not_found() -> None:
     runner = CliRunner()
 
-    with patch("app.use_cases.pkgbuild_exists_on_arch", return_value=False):
+    with patch("app.cli.pkgbuild_exists_on_arch", return_value=False):
         result = runner.invoke(cli, ["import", "test-pkg"])
         assert result.exit_code == 1
         assert "Error: PKGBUILD for 'test-pkg' not found" in result.output
@@ -132,15 +148,20 @@ def test_cli_import_package_not_found() -> None:
 def test_cli_create_package() -> None:
     runner = CliRunner()
 
-    with patch("app.use_cases.run_workflow_sync", return_value={}) as mock_run:
+    with patch("app.use_cases.Runner") as mock_runner_cls:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run_async = mock_run_async
+
         result = runner.invoke(cli, ["create", "test-pkg", "--version", "2.0.0", "--group", "base"])
         assert result.exit_code == 0
         assert "Scaffolding skeleton for package 'test-pkg'" in result.output
-        mock_run.assert_called_once()
-        # Verify passed state
-        state_arg = mock_run.call_args[0][2]
-        assert state_arg["version"] == "2.0.0"
-        assert state_arg["group"] == "base"
+        mock_runner_cls.assert_called_once()
+
+        session_service = mock_runner_cls.call_args[1]["session_service"]
+        import asyncio
+        session = asyncio.run(session_service.get_session(app_name="app", user_id="cli_user", session_id="s1"))
+        assert session.state["version"] == "2.0.0"
+        assert session.state["group"] == "base"
 
 
 def test_cli_fix_success_immediately() -> None:
@@ -180,11 +201,14 @@ def test_cli_fix_auto_patch_success() -> None:
 def test_cli_upgrade_with_version() -> None:
     runner = CliRunner()
 
-    with patch("app.use_cases.run_workflow_sync", return_value={}) as mock_run:
+    with patch("app.use_cases.Runner") as mock_runner_cls:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run_async = mock_run_async
+
         result = runner.invoke(cli, ["upgrade", "test-pkg", "1.2.3"])
         assert result.exit_code == 0
         assert "Upgrading package 'test-pkg' to version 1.2.3..." in result.output
-        mock_run.assert_called_once()
+        mock_runner_cls.assert_called_once()
 
 
 def test_cli_check_all_healthy() -> None:
@@ -197,7 +221,7 @@ def test_cli_check_all_healthy() -> None:
     with patch("app.use_cases.verify_package", return_value=mock_verify), \
          patch("app.use_cases.query_security_feeds", return_value=mock_feeds), \
          patch("app.use_cases.get_latest_upstream_version", return_value="1.0.0"), \
-         patch("app.use_cases.list_workspace_packages", return_value=mock_workspace_pkgs), \
+         patch("app.cli.list_workspace_packages", return_value=mock_workspace_pkgs), \
          patch("app.use_cases.packages_root", return_value="/tmp/packages"), \
          patch("os.path.exists", return_value=True), \
          patch("builtins.open", mock_open_manifest()):
@@ -206,6 +230,7 @@ def test_cli_check_all_healthy() -> None:
         assert result.exit_code == 0
         assert "All packages are healthy" in result.output
         assert "Package: pkg-a" not in result.output
+
 
 
 

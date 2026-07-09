@@ -5,7 +5,7 @@ from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from app.tools import (
     apply_patch,
@@ -71,8 +71,10 @@ def inject_env_into_manifest(pkg_name: str, env_vars: dict[str, str]) -> bool:
 class FixWorkflow(BaseAgent):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    refiner_agent: Agent
-    builder_agent: Agent
+    from app.agents import create_refiner_agent, create_builder_agent
+
+    refiner_agent: Agent = Field(default_factory=create_refiner_agent)
+    builder_agent: Agent = Field(default_factory=create_builder_agent)
 
     async def _run_async_impl(
         self, ctx: InvocationContext

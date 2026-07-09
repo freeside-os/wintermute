@@ -2,119 +2,34 @@ import os
 import sys
 import tomllib
 import urllib.request
-import click
 
-from app.agents import (
-    create_builder_agent,
-    create_refiner_agent,
-    create_scaffold_agent,
-)
-import json
-import re
-from app.agents.runtime import run_workflow_sync
-from app.agents.workflows.fix import inject_env_into_manifest
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+
 from app.app_utils.paths import packages_root, workspace_root
 from app.tools import (
     apply_patch,
     build_package,
     import_pkgbuild,
-    list_workspace_packages,
-    query_security_feeds,
     scan_build_log,
     verify_package,
+    query_security_feeds,
+    list_workspace_packages,
 )
+from app.agents.upstream import get_latest_upstream_version
+from app.agents.workflows.fix import inject_env_into_manifest
+from app.services import memory_factory
 
 
-def pkgbuild_exists_on_arch(pkg_name: str) -> bool:
-    """Checks if a PKGBUILD for the given package exists on the Arch raw repository."""
-    url = f"https://gitlab.archlinux.org/archlinux/packaging/packages/{pkg_name}/-/raw/main/PKGBUILD"
-    req = urllib.request.Request(url, method="HEAD")
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status == 200
-    except Exception:
-        try:
-            req_get = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req_get, timeout=5) as resp:
-                return resp.status == 200
-        except Exception:
-            return False
-
-
-def get_arch_version(pkg_name: str) -> str | None:
-    """Queries the Arch Linux packages API to get the latest version (fast)."""
-    url = f"https://archlinux.org/packages/search/json/?name={pkg_name}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            results = data.get("results", [])
-            for r in results:
-                if r.get("pkgname") == pkg_name:
-                    return r.get("pkgver")
-    except Exception:
-        pass
-    return None
-
-
-def get_latest_upstream_version(pkg_name: str) -> str:
-    """Finds the latest stable version of a package upstream."""
-    arch_ver = get_arch_version(pkg_name)
-    if arch_ver:
-        return arch_ver
-
-    # Fallback to Gemini with search grounding
-    from google import genai
-    from google.genai import types
-
-    if not os.environ.get("GOOGLE_API_KEY") and os.environ.get("GEMINI_API_KEY"):
-        os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
-
-    try:
-        client = genai.Client()
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=(
-                f"What is the latest stable upstream version of the package '{pkg_name}'? "
-                "Respond with ONLY the version string (e.g. '1.3.1') and nothing else."
-            ),
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.0
-            )
-        )
-        version_text = response.text.strip()
-        match = re.search(r"([0-9]+(?:\.[0-9]+)+[a-z]?)", version_text)
-        if match:
-            return match.group(1)
-        return version_text
-    except Exception:
-        return "Unknown"
-
-
-
-def check_packages(pkg_name: str | None, all_pkgs: bool):
+async def check_packages(pkgs_to_check: list[str]):
     """Verifies package lint status, CVEs, and upstream updates."""
-    if not pkg_name and not all_pkgs:
-        click.echo("Error: Please specify <pkg_name> or pass the --all flag.", err=True)
-        sys.exit(1)
-
-    pkgs_to_check = []
-    if all_pkgs:
-        list_res = list_workspace_packages()
-        pkgs_to_check = list_res.get("packages", [])
-    else:
-        pkgs_to_check = [pkg_name]
-
     feeds_res = query_security_feeds()
     cves = feeds_res.get("cves", [])
 
-    click.echo(f"Scanning {len(pkgs_to_check)} package(s)...")
-    click.echo("-" * 80)
-
-    displayed_count = 0
-
     for pkg in pkgs_to_check:
+        yield ("status", f"Scanning package '{pkg}'...")
+
         manifest_path = os.path.join(packages_root(), pkg, "package.manifest")
         current_version = "Unknown"
         if os.path.exists(manifest_path):
@@ -136,36 +51,26 @@ def check_packages(pkg_name: str | None, all_pkgs: bool):
         pkg_cves = [c for c in cves if c.get("package") == pkg]
         cve_summary = "None"
         if pkg_cves:
-            cve_summary = ", ".join([f"{c['cve_id']} (Severity: {c['severity']})" for c in pkg_cves])
+            cve_summary = ", ".join(
+                [f"{c['cve_id']} (Severity: {c['severity']})" for c in pkg_cves]
+            )
 
-        # Filter criteria: only show packages with a new version, lint issues, or CVEs
-        has_new_version = (upstream_version != "Unknown" and current_version != upstream_version)
-        lint_failed = (lint_status != "SUCCESS")
-        has_cves = len(pkg_cves) > 0
-
-        # If a specific package name was requested, we always show it.
-        # Otherwise, we filter using the criteria.
-        if not all_pkgs or has_new_version or lint_failed or has_cves:
-            click.echo(f"Package: {pkg}")
-            click.echo(f"  - Local Version: {current_version}")
-            click.echo(f"  - Upstream version: {upstream_version}")
-            click.echo(f"  - Lint Verification: {lint_status}")
-            click.echo(f"  - Security CVEs: {cve_summary}")
-            click.echo("-" * 80)
-            displayed_count += 1
-
-    if all_pkgs and displayed_count == 0:
-        click.echo("All packages are healthy (up-to-date, lint clean, and no known CVEs).")
+        yield (
+            "result",
+            {
+                "package": pkg,
+                "local_version": current_version,
+                "upstream_version": upstream_version,
+                "lint_status": lint_status,
+                "cves": pkg_cves,
+                "cve_summary": cve_summary,
+            },
+        )
 
 
-def import_package(pkg_name: str, url: str | None):
+async def import_package(pkg_name: str, url: str | None):
     """Imports package PKGBUILD, converts, and builds it."""
-    if not url:
-        if not pkgbuild_exists_on_arch(pkg_name):
-            click.echo(f"Error: PKGBUILD for '{pkg_name}' not found on Arch Linux packaging repository, and no custom --url was provided.", err=True)
-            sys.exit(1)
-
-    click.echo(f"Importing PKGBUILD for package '{pkg_name}'...")
+    from app.agents.workflows.import_pkg import ImportWorkflow
 
     if url:
         sys.path.append(os.path.join(workspace_root(), "packages"))
@@ -178,172 +83,242 @@ def import_package(pkg_name: str, url: str | None):
                 content = f.read()
 
             import fspack
-            manifest, justfile, pkgver, source_url, checksum = fspack.generate_freeside_package(content)
 
-            with open(os.path.join(pkg_dir, "package.manifest"), "w", encoding="utf-8") as f:
+            manifest, justfile, pkgver, source_url, checksum = (
+                fspack.generate_freeside_package(content)
+            )
+
+            with open(
+                os.path.join(pkg_dir, "package.manifest"), "w", encoding="utf-8"
+            ) as f:
                 f.write(manifest)
-            with open(os.path.join(pkg_dir, "package.justfile"), "w", encoding="utf-8") as f:
+            with open(
+                os.path.join(pkg_dir, "package.justfile"), "w", encoding="utf-8"
+            ) as f:
                 f.write(justfile)
 
-            fspack.create_readme_file(pkg_dir, pkg_name, pkgver, url, source_url, checksum)
-            click.echo(f"Local conversion successful for custom URL: {url}")
+            fspack.create_readme_file(
+                pkg_dir, pkg_name, pkgver, url, source_url, checksum
+            )
+            yield ("success", f"Local conversion successful for custom URL: {url}")
         except Exception as e:
-            click.echo(f"Error converting PKGBUILD: {e}", err=True)
-            sys.exit(1)
+            yield ("error", f"Error converting PKGBUILD: {e}")
+            return
     else:
+        yield ("status", f"Importing PKGBUILD for package '{pkg_name}'...")
         res = import_pkgbuild(pkg_name)
         if res.get("status") != "success":
-            click.echo(f"Error importing package: {res.get('message', 'Unknown error')}", err=True)
-            sys.exit(1)
+            yield (
+                "error",
+                f"Error importing package: {res.get('message', 'Unknown error')}",
+            )
+            return
 
-    from app.agents.workflows.import_pkg import ImportWorkflow
-    scaffold_agent = create_scaffold_agent()
-    refiner_agent = create_refiner_agent()
-    builder_agent = create_builder_agent()
-
-    workflow = ImportWorkflow(
-        name="import_workflow",
-        scaffold_agent=scaffold_agent,
-        refiner_agent=refiner_agent,
-        builder_agent=builder_agent
+    yield (
+        "status",
+        f"Routing '{pkg_name}' to refinement and sandbox build...",
+    )
+    workflow = ImportWorkflow(name="import_workflow")
+    session_service = InMemorySessionService()
+    initial_state = {"pkg_name": pkg_name, "import_done": True}
+    await session_service.create_session(
+        app_name="app",
+        user_id="cli_user",
+        session_id="s1",
+        state=initial_state,
     )
 
-    click.echo(f"Routing '{pkg_name}' to refinement and sandbox build...")
-    state_vars = {"import_done": True}
-    run_workflow_sync(workflow, pkg_name, state_vars)
+    runner = Runner(
+        agent=workflow,
+        app_name="app",
+        session_service=session_service,
+        memory_service=memory_factory("memory://"),
+    )
+
+    async for event in runner.run_async(
+        user_id="cli_user",
+        session_id="s1",
+        new_message=types.Content(
+            role="user", parts=[types.Part.from_text(text="Start workflow")]
+        ),
+    ):
+        yield ("event", event)
 
 
-def create_package(pkg_name: str, group: str, version: str):
+async def create_package(pkg_name: str, group: str, version: str):
     """Scaffolds a new package skeleton, refines recipe, and compiles it."""
     from app.agents.workflows.create import CreateWorkflow
-    scaffold_agent = create_scaffold_agent()
-    refiner_agent = create_refiner_agent()
-    builder_agent = create_builder_agent()
 
-    workflow = CreateWorkflow(
-        name="create_workflow",
-        scaffold_agent=scaffold_agent,
-        refiner_agent=refiner_agent,
-        builder_agent=builder_agent
+    yield ("status", f"Scaffolding skeleton for package '{pkg_name}' (Version: {version}, Group: {group})...")
+
+    workflow = CreateWorkflow(name="create_workflow")
+
+    session_service = InMemorySessionService()
+    initial_state = {"pkg_name": pkg_name, "group": group, "version": version}
+    await session_service.create_session(
+        app_name="app",
+        user_id="cli_user",
+        session_id="s1",
+        state=initial_state,
     )
 
-    click.echo(f"Scaffolding skeleton for package '{pkg_name}' (Version: {version}, Group: {group})...")
-    state_vars = {
-        "group": group,
-        "version": version
-    }
-    run_workflow_sync(workflow, pkg_name, state_vars)
+    runner = Runner(
+        agent=workflow,
+        app_name="app",
+        session_service=session_service,
+        memory_service=memory_factory("memory://"),
+    )
+
+    async for event in runner.run_async(
+        user_id="cli_user",
+        session_id="s1",
+        new_message=types.Content(
+            role="user", parts=[types.Part.from_text(text="Start workflow")]
+        ),
+    ):
+        yield ("event", event)
 
 
-def fix_package(pkg_name: str):
+async def fix_package(pkg_name: str, operator_suggestion: str | None = None):
     """Performs builds, signature log scanning, auto-patching, and agent-based fixing."""
-    click.echo(f"Building package '{pkg_name}' inside sandbox...")
-    build_res = build_package(pkg_name)
-    if build_res.get("status") == "success":
-        click.echo(f"Package '{pkg_name}' compiled successfully! No fixes needed. ✓")
-        return
-
-    click.echo("Scanning build log for compiler/linker failure signatures...")
-    scan_res = scan_build_log(pkg_name)
-    sig = scan_res.get("signature") if scan_res.get("status") == "success" else None
-    proposal = scan_res.get("proposal", {}) if scan_res.get("status") == "success" else {}
-
-    kb_suggestion = None
-    if sig:
-        click.echo(f"Matched signature: {sig}")
-        click.echo(proposal.get("message"))
-
-        if sig == "semantic_kb_match":
-            kb_suggestion = f"Use the following Knowledge Base match to resolve the compilation issue:\n{proposal.get('message')}"
-        else:
-
-            if proposal.get("type") == "env_injection":
-                env = proposal.get("env", {})
-                inject_env_into_manifest(pkg_name, env)
-                click.echo(f"Injected environment: {env}")
-            elif proposal.get("type") == "patch":
-                apply_patch(pkg_name, proposal.get("target_file", "Makefile"), proposal.get("patch_content", ""))
-                click.echo("Applied proposed patch.")
-
-            click.echo("Rebuilding after auto-patch...")
-            build_res = build_package(pkg_name)
-            if build_res.get("status") == "success":
-                click.echo(f"Package '{pkg_name}' built successfully after signature auto-patch! ✓")
-                return
-
     from app.agents.workflows.fix import FixWorkflow
-    refiner_agent = create_refiner_agent()
-    builder_agent = create_builder_agent()
 
-    workflow = FixWorkflow(
-        name="fix_workflow",
-        refiner_agent=refiner_agent,
-        builder_agent=builder_agent
-    )
-
-    state_vars = {"builder_done": False}
-    if kb_suggestion:
-        state_vars["operator_suggestion"] = kb_suggestion
-        click.echo("Activating Build & Fixer Agent to diagnose and repair using Knowledge Base match...")
-    else:
-        click.echo("Activating Build & Fixer Agent to diagnose and repair...")
-
-    run_workflow_sync(workflow, pkg_name, state_vars)
-
-    build_res = build_package(pkg_name)
-    if build_res.get("status") == "success":
-        click.echo(f"Package '{pkg_name}' successfully compiled and verified! ✓")
-        return
-
-    while True:
-        click.echo(f"\nCompilation continues to fail for '{pkg_name}'.")
-        suggestion = click.prompt("Enter a suggestion to fix the build, or type 'abort' to stop")
-        if suggestion.strip().lower() == "abort":
-            click.echo("Fix workflow aborted.")
-            sys.exit(1)
-
-        click.echo(f"Retrying build with operator suggestion: '{suggestion}'...")
-        state_vars = {
-            "builder_done": False,
-            "operator_suggestion": suggestion
-        }
-        run_workflow_sync(workflow, pkg_name, state_vars)
-
+    if not operator_suggestion:
         build_res = build_package(pkg_name)
         if build_res.get("status") == "success":
-            click.echo(f"Package '{pkg_name}' successfully compiled and verified! ✓")
+            yield (
+                "success",
+                f"Package '{pkg_name}' compiled successfully! No fixes needed. ✓",
+            )
             return
 
+        yield (
+            "status",
+            "Scanning build log for compiler/linker failure signatures...",
+        )
+        scan_res = scan_build_log(pkg_name)
+        sig = (
+            scan_res.get("signature")
+            if scan_res.get("status") == "success"
+            else None
+        )
+        proposal = (
+            scan_res.get("proposal", {})
+            if scan_res.get("status") == "success"
+            else {}
+        )
 
-def upgrade_package(pkg_name: str, version: str | None):
-    """Upgrades package version, with confirmation if version is omitted."""
-    if not version:
-        click.echo("Looking up the latest version upstream...")
-        version = get_latest_upstream_version(pkg_name)
-        if version == "Unknown":
-            click.echo(f"Error: Could not retrieve latest upstream version for {pkg_name}.", err=True)
-            sys.exit(1)
+        if sig:
+            yield (
+                "info",
+                f"Matched signature: {sig}\nProposal: {proposal.get('message')}",
+            )
 
-        if not click.confirm(f"Latest upstream version for '{pkg_name}' is {version}. Do you want to upgrade?"):
-            click.echo("Upgrade aborted.")
-            return
+            if sig == "semantic_kb_match":
+                operator_suggestion = f"Use the following Knowledge Base match to resolve the compilation issue:\n{proposal.get('message')}"
+            else:
+                if proposal.get("type") == "env_injection":
+                    env = proposal.get("env", {})
+                    inject_env_into_manifest(pkg_name, env)
+                    yield ("info", f"Injected environment: {env}")
+                elif proposal.get("type") == "patch":
+                    apply_patch(
+                        pkg_name,
+                        proposal.get("target_file", "Makefile"),
+                        proposal.get("patch_content", ""),
+                    )
+                    yield ("info", "Applied proposed patch.")
 
-    from app.agents.workflows.upgrade import UpgradeWorkflow
-    refiner_agent = create_refiner_agent()
-    builder_agent = create_builder_agent()
+                yield ("status", "Rebuilding after auto-patch...")
+                build_res = build_package(pkg_name)
+                if build_res.get("status") == "success":
+                    yield (
+                        "success",
+                        f"Package '{pkg_name}' built successfully after signature auto-patch! ✓",
+                    )
+                    return
 
-    workflow = UpgradeWorkflow(
-        name="upgrade_workflow",
-        refiner_agent=refiner_agent,
-        builder_agent=builder_agent
+    workflow = FixWorkflow(name="fix_workflow")
+    state_vars = {"builder_done": False}
+    if operator_suggestion:
+        state_vars["operator_suggestion"] = operator_suggestion
+
+    session_service = InMemorySessionService()
+    initial_state = {"pkg_name": pkg_name}
+    for k, v in state_vars.items():
+        initial_state[k] = v
+
+    await session_service.create_session(
+        app_name="app",
+        user_id="cli_user",
+        session_id="s1",
+        state=initial_state,
     )
+
+    runner = Runner(
+        agent=workflow,
+        app_name="app",
+        session_service=session_service,
+        memory_service=memory_factory("memory://"),
+    )
+
+    async for event in runner.run_async(
+        user_id="cli_user",
+        session_id="s1",
+        new_message=types.Content(
+            role="user", parts=[types.Part.from_text(text="Start workflow")]
+        ),
+    ):
+        yield ("event", event)
+
+    yield ("status", "Verifying build after workflow run...")
+    build_res = build_package(pkg_name)
+    if build_res.get("status") == "success":
+        yield (
+            "success",
+            f"Package '{pkg_name}' successfully compiled and verified! ✓",
+        )
+    else:
+        yield ("error", "compilation_failed")
+
+
+async def upgrade_package(pkg_name: str, version: str):
+    """Upgrades package version."""
+    from app.agents.workflows.upgrade import UpgradeWorkflow
+
+    workflow = UpgradeWorkflow(name="upgrade_workflow")
 
     state_vars = {
         "version": version,
         "upgrade_done": False,
         "refiner_done": False,
-        "builder_done": False
+        "builder_done": False,
     }
 
-    click.echo(f"Upgrading package '{pkg_name}' to version {version}...")
-    run_workflow_sync(workflow, pkg_name, state_vars)
+    session_service = InMemorySessionService()
+    initial_state = {"pkg_name": pkg_name}
+    for k, v in state_vars.items():
+        initial_state[k] = v
+
+    await session_service.create_session(
+        app_name="app",
+        user_id="cli_user",
+        session_id="s1",
+        state=initial_state,
+    )
+
+    runner = Runner(
+        agent=workflow,
+        app_name="app",
+        session_service=session_service,
+        memory_service=memory_factory("memory://"),
+    )
+
+    async for event in runner.run_async(
+        user_id="cli_user",
+        session_id="s1",
+        new_message=types.Content(
+            role="user", parts=[types.Part.from_text(text="Start workflow")]
+        ),
+    ):
+        yield ("event", event)

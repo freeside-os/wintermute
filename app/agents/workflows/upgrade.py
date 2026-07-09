@@ -4,7 +4,7 @@ from google.adk.agents import Agent, BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from app.tools import apply_patch, build_package, scan_build_log, verify_package
 from app.agents.workflows.fix import inject_env_into_manifest
@@ -13,8 +13,10 @@ from app.agents.workflows.fix import inject_env_into_manifest
 class UpgradeWorkflow(BaseAgent):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    refiner_agent: Agent
-    builder_agent: Agent
+    from app.agents import create_refiner_agent, create_builder_agent
+
+    refiner_agent: Agent = Field(default_factory=create_refiner_agent)
+    builder_agent: Agent = Field(default_factory=create_builder_agent)
 
     async def _run_async_impl(
         self, ctx: InvocationContext
