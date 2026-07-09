@@ -90,10 +90,10 @@ def test_cli_check_single_package() -> None:
         ]
     }
 
-    with patch("app.cli.verify_package", return_value=mock_verify), \
-         patch("app.cli.query_security_feeds", return_value=mock_feeds), \
-         patch("app.cli.get_latest_upstream_version", return_value="1.0.1"), \
-         patch("app.cli.packages_root", return_value="/tmp/packages"), \
+    with patch("app.use_cases.verify_package", return_value=mock_verify), \
+         patch("app.use_cases.query_security_feeds", return_value=mock_feeds), \
+         patch("app.use_cases.get_latest_upstream_version", return_value="1.0.1"), \
+         patch("app.use_cases.packages_root", return_value="/tmp/packages"), \
          patch("os.path.exists", return_value=True), \
          patch("builtins.open", mock_open_manifest()):
 
@@ -109,9 +109,9 @@ def test_cli_check_single_package() -> None:
 def test_cli_import_package_arch() -> None:
     runner = CliRunner()
 
-    with patch("app.cli.pkgbuild_exists_on_arch", return_value=True), \
-         patch("app.cli.import_pkgbuild", return_value={"status": "success"}), \
-         patch("app.cli.run_workflow_sync", return_value={}) as mock_run:
+    with patch("app.use_cases.pkgbuild_exists_on_arch", return_value=True), \
+         patch("app.use_cases.import_pkgbuild", return_value={"status": "success"}), \
+         patch("app.use_cases.run_workflow_sync", return_value={}) as mock_run:
 
         result = runner.invoke(cli, ["import", "test-pkg"])
         assert result.exit_code == 0
@@ -123,7 +123,7 @@ def test_cli_import_package_arch() -> None:
 def test_cli_import_package_not_found() -> None:
     runner = CliRunner()
 
-    with patch("app.cli.pkgbuild_exists_on_arch", return_value=False):
+    with patch("app.use_cases.pkgbuild_exists_on_arch", return_value=False):
         result = runner.invoke(cli, ["import", "test-pkg"])
         assert result.exit_code == 1
         assert "Error: PKGBUILD for 'test-pkg' not found" in result.output
@@ -132,7 +132,7 @@ def test_cli_import_package_not_found() -> None:
 def test_cli_create_package() -> None:
     runner = CliRunner()
 
-    with patch("app.cli.run_workflow_sync", return_value={}) as mock_run:
+    with patch("app.use_cases.run_workflow_sync", return_value={}) as mock_run:
         result = runner.invoke(cli, ["create", "test-pkg", "--version", "2.0.0", "--group", "base"])
         assert result.exit_code == 0
         assert "Scaffolding skeleton for package 'test-pkg'" in result.output
@@ -146,7 +146,7 @@ def test_cli_create_package() -> None:
 def test_cli_fix_success_immediately() -> None:
     runner = CliRunner()
 
-    with patch("app.cli.build_package", return_value={"status": "success"}):
+    with patch("app.use_cases.build_package", return_value={"status": "success"}):
         result = runner.invoke(cli, ["fix", "test-pkg"])
         assert result.exit_code == 0
         assert "compiled successfully! No fixes needed." in result.output
@@ -167,9 +167,9 @@ def test_cli_fix_auto_patch_success() -> None:
         }
     }
 
-    with patch("app.cli.build_package", side_effect=[mock_build_fail, mock_build_success]), \
-         patch("app.cli.scan_build_log", return_value=mock_scan), \
-         patch("app.cli.inject_env_into_manifest", return_value=True):
+    with patch("app.use_cases.build_package", side_effect=[mock_build_fail, mock_build_success]), \
+         patch("app.use_cases.scan_build_log", return_value=mock_scan), \
+         patch("app.use_cases.inject_env_into_manifest", return_value=True):
 
         result = runner.invoke(cli, ["fix", "test-pkg"])
         assert result.exit_code == 0
@@ -180,7 +180,7 @@ def test_cli_fix_auto_patch_success() -> None:
 def test_cli_upgrade_with_version() -> None:
     runner = CliRunner()
 
-    with patch("app.cli.run_workflow_sync", return_value={}) as mock_run:
+    with patch("app.use_cases.run_workflow_sync", return_value={}) as mock_run:
         result = runner.invoke(cli, ["upgrade", "test-pkg", "1.2.3"])
         assert result.exit_code == 0
         assert "Upgrading package 'test-pkg' to version 1.2.3..." in result.output
@@ -194,11 +194,11 @@ def test_cli_check_all_healthy() -> None:
     mock_feeds = {"status": "success", "cves": []}
     mock_workspace_pkgs = {"status": "success", "packages": ["pkg-a", "pkg-b"]}
 
-    with patch("app.cli.verify_package", return_value=mock_verify), \
-         patch("app.cli.query_security_feeds", return_value=mock_feeds), \
-         patch("app.cli.get_latest_upstream_version", return_value="1.0.0"), \
-         patch("app.cli.list_workspace_packages", return_value=mock_workspace_pkgs), \
-         patch("app.cli.packages_root", return_value="/tmp/packages"), \
+    with patch("app.use_cases.verify_package", return_value=mock_verify), \
+         patch("app.use_cases.query_security_feeds", return_value=mock_feeds), \
+         patch("app.use_cases.get_latest_upstream_version", return_value="1.0.0"), \
+         patch("app.use_cases.list_workspace_packages", return_value=mock_workspace_pkgs), \
+         patch("app.use_cases.packages_root", return_value="/tmp/packages"), \
          patch("os.path.exists", return_value=True), \
          patch("builtins.open", mock_open_manifest()):
 
@@ -206,6 +206,7 @@ def test_cli_check_all_healthy() -> None:
         assert result.exit_code == 0
         assert "All packages are healthy" in result.output
         assert "Package: pkg-a" not in result.output
+
 
 
 # ------------------------------------------------------------------------------

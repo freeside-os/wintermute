@@ -1,4 +1,3 @@
-import os
 from collections.abc import AsyncGenerator
 
 from google.adk.agents import Agent, BaseAgent
@@ -8,13 +7,12 @@ from google.genai import types
 from pydantic import ConfigDict
 
 from app.tools import apply_patch, build_package, scan_build_log, verify_package
-from app.workflows.fix import inject_env_into_manifest
+from app.agents.workflows.fix import inject_env_into_manifest
 
 
-class ImportWorkflow(BaseAgent):
+class UpgradeWorkflow(BaseAgent):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    scaffold_agent: Agent
     refiner_agent: Agent
     builder_agent: Agent
 
@@ -23,41 +21,31 @@ class ImportWorkflow(BaseAgent):
     ) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
         pkg_name = state.get("pkg_name")
+        version = state.get("version")
+        is_security_update = state.get("is_security_update", False)
 
-        # 1. Import PKGBUILD Step
-        if not state.get("import_done"):
+
+
+        # 1. Perform upgrade step
+        if not state.get("upgrade_done"):
             yield Event(
                 author=self.name,
                 content=types.Content(
                     role="model",
-                    parts=[types.Part(text=f"Importing package {pkg_name} PKGBUILD from Arch Linux...")]
+                    parts=[types.Part(text=f"Running package version upgrade to {version}...")]
                 )
             )
-            from app.tools import import_pkgbuild
-            res = import_pkgbuild(pkg_name)
-            state["import_result"] = res
-            state["import_done"] = True
+            from app.tools import upgrade_package_version
+            res = upgrade_package_version(pkg_name, version)
+            state["upgrade_result"] = res
+            state["upgrade_done"] = True
             yield Event(
                 author=self.name,
                 content=types.Content(
                     role="model",
-                    parts=[types.Part(text=f"Import tool result: {res}")]
+                    parts=[types.Part(text=f"Upgrade tool result: {res}")]
                 )
             )
-
-        manifest_path = f"/home/dq/Code/freeside/packages/{pkg_name}/package.manifest"
-        if not os.path.exists(manifest_path) or os.path.getsize(manifest_path) == 0:
-            if not state.get("scaffold_done"):
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Import failed or manifest empty for package {pkg_name}. Activating Scaffolder Agent fallback...")]
-                    )
-                )
-                async for event in self.scaffold_agent.run_async(ctx):
-                    yield event
-                state["scaffold_done"] = True
 
         # 2. Recipe Refiner Step
         if not state.get("refiner_done"):
@@ -129,23 +117,24 @@ class ImportWorkflow(BaseAgent):
                     yield event
                 state["builder_done"] = True
 
-        # 4. Final verification
+        # Verify build
         verify_res = verify_package(pkg_name)
         build_res = build_package(pkg_name)
 
-        if verify_res.get("status") == "success" and build_res.get("status") == "success":
+        if verify_res.get("status") != "success" or build_res.get("status") != "success":
             yield Event(
                 author=self.name,
                 content=types.Content(
                     role="model",
-                    parts=[types.Part(text=f"Promotion successful! Package {pkg_name} is fully verified and promoted autonomously. Workflow complete. ✓")]
+                    parts=[types.Part(text=f"Package '{pkg_name}' upgraded, but has verification/compilation issues. Upgrade verification failed.")]
                 )
             )
-        else:
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text=f"Package '{pkg_name}' imported, but has verification/compilation issues. Please run 'fix {pkg_name}' to resolve.")]
-                )
+            return
+
+        yield Event(
+            author=self.name,
+            content=types.Content(
+                role="model",
+                parts=[types.Part(text=f"Promotion successful! Package {pkg_name} is fully verified and promoted. Workflow complete. ✓")]
             )
+        )
