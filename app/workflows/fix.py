@@ -220,7 +220,6 @@ class FixWorkflow(BaseAgent):
                 author=self.name,
                 content=types.Content(
                     role="model",
-                    parts=[types.Part(text=f"Fix process completed, but package '{pkg_name}' still has verification/compilation issues. Setting pending operator input.")]
+                    parts=[types.Part(text=f"Fix process completed, but package '{pkg_name}' still has verification/compilation issues.")]
                 )
             )
-            state["pending_fix_input"] = True

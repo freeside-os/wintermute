@@ -10,6 +10,4 @@ def _patched_model_copy(self, *, update=None, deep=False):
 
 InvocationContext.model_copy = _patched_model_copy
 
-from .agent import app  # noqa: E402
 
-__all__ = ["app"]

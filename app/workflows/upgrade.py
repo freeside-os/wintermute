@@ -24,34 +24,7 @@ class UpgradeWorkflow(BaseAgent):
         version = state.get("version")
         is_security_update = state.get("is_security_update", False)
 
-        # Check if we are waiting for operator approval
-        if state.get("pending_approval"):
-            last_event = ctx.session.events[-1]
-            user_msg = ""
-            if last_event.author == "user" and last_event.content and last_event.content.parts:
-                user_msg = last_event.content.parts[0].text.lower()
 
-            if "yes" in user_msg or "approve" in user_msg:
-                state["pending_approval"] = False
-                state["approved"] = True
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Operator approved! Promoting package {pkg_name} version {version} to base/system distribution channels. Workflow complete. ✓")]
-                    )
-                )
-                return
-            else:
-                state["pending_approval"] = False
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part(text=f"Upgrade aborted by operator. Package {pkg_name} was not promoted.")]
-                    )
-                )
-                return
 
         # 1. Perform upgrade step
         if not state.get("upgrade_done"):
@@ -158,24 +131,10 @@ class UpgradeWorkflow(BaseAgent):
             )
             return
 
-        # 4. Operator approval or autonomous promotion
-        if not is_security_update:
-            state["pending_approval"] = True
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text=
-                        f"The package '{pkg_name}' has been successfully upgraded to version {version} and successfully compiled/verified in the container sandbox.\n"
-                        f"Operator confirmation required for promotion. Do you approve promoting this package? (Reply with 'yes' or 'no')"
-                    )]
-                )
+        yield Event(
+            author=self.name,
+            content=types.Content(
+                role="model",
+                parts=[types.Part(text=f"Promotion successful! Package {pkg_name} is fully verified and promoted. Workflow complete. ✓")]
             )
-        else:
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text=f"Promotion successful! Package {pkg_name} is fully verified and promoted autonomously (Security Upgrade). Workflow complete. ✓")]
-                )
-            )
+        )

@@ -1,6 +1,8 @@
 """Unit test configuration: sets up a temporary workspace with fixture packages."""
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 import pytest
 
