@@ -1,1 +1,3 @@
-import os; os.environ["GEMINI_API_KEY"] = "dummy_key_for_tests"
+import os
+os.environ.setdefault("GEMINI_API_KEY", "dummy")
+os.environ.setdefault("GOOGLE_API_KEY", "dummy")
