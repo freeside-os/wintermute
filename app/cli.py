@@ -1,4 +1,6 @@
 import sys
+from dotenv import load_dotenv
+load_dotenv()
 import click
 
 from app.use_cases import (
