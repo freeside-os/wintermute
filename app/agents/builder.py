@@ -4,10 +4,12 @@ from google.genai import types
 
 from app.consts import MODEL_BUILDER, MODEL_RETRIES
 from app.tools import (
+    add_error_pattern,
     apply_patch,
     build_package,
     read_build_logs,
     read_package_file,
+    report_false_positive_pattern,
     save_memory_note,
     search_memory,
     verify_package,
@@ -42,14 +44,19 @@ def create_builder_agent() -> Agent:
             "that will be helpful for future updates. Write the updated README.md back using `write_package_file`.\n"
             "Output a short build report when done.\n\n"
             "When analyzing a build failure, prioritize using `search_memory` first to see if you have solved this quirk before.\n"
-            "When you successfully fix a build error, immediately use `save_memory_note` to record the exact error and the fix for future reference."
+            "When you successfully fix a build error, immediately use `save_memory_note` to record the exact error and the fix for future reference.\n"
+            "Log Parsing Rules:\n"
+            " - If `read_build_logs` returns a log containing 'Showing last 100 lines' and you successfully diagnose the error from it, you MUST call `add_error_pattern` to teach the parser the regex to catch this error in the future.\n"
+            " - If `read_build_logs` returns parsed lines that are unhelpful noise (a regex pattern matched a non-error), you MUST call `report_false_positive_pattern` with the offending regex and the current package name to report the noise."
         ),
         tools=[
+            add_error_pattern,
             build_package,
             verify_package,
             read_build_logs,
             apply_patch,
             read_package_file,
+            report_false_positive_pattern,
             write_package_file,
             search_memory,
             save_memory_note,

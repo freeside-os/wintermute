@@ -26,6 +26,10 @@ from app.tools.package_io import (
     upgrade_package_version,
     write_package_file,
 )
+from app.tools.pattern_storage import (
+    add_error_pattern,
+    report_false_positive_pattern,
+)
 from app.tools.search import (
     search_packaging_resources,
 )
@@ -35,6 +39,7 @@ from app.tools.status import (
 
 __all__ = [
     "DependencyGraph",
+    "add_error_pattern",
     "apply_patch",
     "build_dependency_tree",
     "build_package",
@@ -46,6 +51,7 @@ __all__ = [
     "query_security_feeds",
     "read_build_logs",
     "read_package_file",
+    "report_false_positive_pattern",
     "save_memory_note",
     "scan_build_log",
     "search_memory",

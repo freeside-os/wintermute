@@ -4,6 +4,7 @@ import re
 import subprocess
 
 from app.app_utils.paths import workspace_root as get_workspace_root
+from app.tools.pattern_storage import get_active_patterns
 
 
 def verify_package(pkg_name: str) -> dict:
@@ -101,15 +102,7 @@ def parse_compiler_errors(log_content: str) -> str:
     if len(lines) <= 250:
         return log_content
 
-    error_patterns = [
-        r"(?i)\berror\b",
-        r"(?i)fatal error",
-        r"(?i)\bfailed\b",
-        r"(?i)undefined reference",
-        r"(?i)ld returned",
-        r"(?i)cannot find -l",
-        r"(?i)collect2:"
-    ]
+    error_patterns = get_active_patterns()
     matched_lines = []
     for i, line in enumerate(lines):
         for pattern in error_patterns:
