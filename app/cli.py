@@ -1,4 +1,6 @@
+import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 import click
@@ -12,6 +14,10 @@ from app.use_cases import (
 )
 from app.agents.upstream import get_latest_upstream_version, pkgbuild_exists_on_arch
 from app.tools import list_workspace_packages
+from app.registry_domains import DomainRegistry
+from app.manifests.parser import ManifestParser, ManifestKind, EventHandlerSpec
+from app.engine import WintermuteEngine, EngineEvent
+from app.types import ExecutionSpec
 
 
 # ------------------------------------------------------------------------------
@@ -44,7 +50,7 @@ def run_use_case(async_gen) -> tuple[str, list]:
                 pass
             elif msg_type == "event":
                 event = content
-                if event.content and event.content.parts:
+                if hasattr(event, "content") and event.content and event.content.parts:
                     for part in event.content.parts:
                         if part.text:
                             author = event.author if event.author else "workflow"
@@ -56,43 +62,44 @@ def run_use_case(async_gen) -> tuple[str, list]:
                             else:
                                 click.echo(part.text)
 
-                for fc in event.get_function_calls():
-                    args_str = (
-                        ", ".join(f"{k}={v}" for k, v in fc.args.items())
-                        if fc.args
-                        else ""
-                    )
-                    click.echo(
-                        click.style(
-                            f"  🔧 Calling tool '{fc.name}' ({args_str})...",
-                            fg="yellow",
+                if hasattr(event, "get_function_calls"):
+                    for fc in event.get_function_calls():
+                        args_str = (
+                            ", ".join(f"{k}={v}" for k, v in fc.args.items())
+                            if fc.args
+                            else ""
                         )
-                    )
-
-                for fr in event.get_function_responses():
-                    status = "success"
-                    response_val = fr.response
-                    if isinstance(response_val, dict):
-                        status = response_val.get("status", "completed")
-                        if status == "error":
-                            click.echo(
-                                click.style(
-                                    f"  ✗ Tool '{fr.name}' failed: {response_val.get('message', 'Unknown error')}",
-                                    fg="red",
-                                    bold=True,
-                                )
+                        click.echo(
+                            click.style(
+                                f"  🔧 Calling tool '{fc.name}' ({args_str})...",
+                                fg="yellow",
                             )
-                            continue
-                    click.echo(
-                        click.style(
-                            f"  ✓ Tool '{fr.name}' completed with status: {status}",
-                            fg="green",
                         )
-                    )
+
+                if hasattr(event, "get_function_responses"):
+                    for fr in event.get_function_responses():
+                        status = "success"
+                        response_val = fr.response
+                        if isinstance(response_val, dict):
+                            status = response_val.get("status", "completed")
+                            if status == "error":
+                                click.echo(
+                                    click.style(
+                                        f"  ✗ Tool '{fr.name}' failed: {response_val.get('message', 'Unknown error')}",
+                                        fg="red",
+                                        bold=True,
+                                    )
+                                )
+                                continue
+                        click.echo(
+                            click.style(
+                                f"  ✓ Tool '{fr.name}' completed with status: {status}",
+                                fg="green",
+                            )
+                        )
 
     try:
         import nest_asyncio
-
         nest_asyncio.apply()
     except Exception:
         pass
@@ -105,7 +112,7 @@ def run_interactive_menu(ctx):
     """Enters an interactive prompt menu to select operation and input arguments."""
     import questionary
 
-    click.echo("=== Wintermute Interactive Package Manager ===")
+    click.echo("=== Wintermute Platform CLI ===")
 
     choices = [
         "Check Package status (verify lint, CVEs, upstream updates)",
@@ -125,7 +132,6 @@ def run_interactive_menu(ctx):
         click.echo("Exiting Wintermute.")
         sys.exit(0)
 
-    # Resolve commands from the CLI group to invoke them properly
     if action.startswith("Check"):
         pkg = questionary.text("Enter package name (leave blank to check all):").ask()
         if pkg is None:
@@ -196,9 +202,38 @@ def run_interactive_menu(ctx):
 @click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx):
-    """Wintermute Package Manager CLI."""
+    """Wintermute Platform CLI."""
+    DomainRegistry.autodiscover()
     if ctx.invoked_subcommand is None:
         run_interactive_menu(ctx)
+
+
+@cli.command()
+@click.argument("manifest_path", type=click.Path(exists=True))
+def run(manifest_path):
+    """Executes a declarative Kubernetes-style YAML manifest file."""
+    click.echo(click.style(f"Parsing manifest: {manifest_path}", fg="cyan"))
+    parsed = ManifestParser.parse_file(Path(manifest_path))
+
+    import asyncio
+    engine = WintermuteEngine()
+
+    async def _execute_spec(spec: ExecutionSpec):
+        async for event in engine.execute(spec):
+            if event.event_type == "started":
+                click.echo(click.style(f"⚙ {event.message}", fg="cyan"))
+            elif event.event_type == "completed":
+                click.echo(click.style(f"✓ {event.message}", fg="green", bold=True))
+            else:
+                click.echo(f"  {event.message}")
+
+    if isinstance(parsed, list):
+        for spec in parsed:
+            asyncio.run(_execute_spec(spec))
+    elif isinstance(parsed, ExecutionSpec):
+        asyncio.run(_execute_spec(parsed))
+    elif isinstance(parsed, EventHandlerSpec):
+        click.echo(click.style(f"✓ Started EventHandler '{parsed.name}' using source adapter '{parsed.source_type}'", fg="green", bold=True))
 
 
 @cli.command()
