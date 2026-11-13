@@ -1,95 +1,80 @@
 # Wintermute Agentic Platform
 
-Wintermute is the autonomous AI-powered development platform and harness for Freeside OS. Built using Google Gemini and the Google ADK, it automates development, build diagnostics, security auditing, QEMU boot testing, and release workflows across `packages`, `straylight`, `installer`, `simstim`, `freesidectl`, and `fstools`.
+Wintermute is the autonomous AI engineering platform and orchestrator for Freeside OS, built on the **Google Antigravity SDK** (`google-antigravity`) using a hexagonal (ports-and-adapters) architecture.
 
 ---
 
-## Project Structure
+## Architecture & Project Structure
 
 ```text
 wintermute/
-├── app/                           # Core agent platform code
-│   ├── cli.py                     # Click CLI entry point & unified manifest runner
-│   ├── engine.py                  # WintermuteEngine runtime
-│   ├── config.py                  # WorkspaceConfig sub-repo path resolver
-│   ├── types.py                   # DomainKind, WorkflowKind, and ExecutionSpec types
-│   ├── provider.py                # DomainProvider protocol & fallback
-│   ├── registry.py                # RegistryLibrary for namespaced tools & skills
-│   ├── registry_domains.py        # DomainRegistry for autodiscovery & validation
-│   ├── manifests/                 # K8s-style manifest parser (kind: Workflow / EventHandler)
-│   ├── parsers/                   # Compiler diagnostics (RustDiagnosticParser)
-│   ├── domains/                   # Domain plugins (packages, straylight, installer, etc.)
-│   ├── tools/                     # System tools & container execution wrappers
-│   └── agents/                    # Sub-agents and ADK workflows
-├── .wintermute/                   # Workflows and event handler manifests
-├── tests/                         # Test suite
-└── pyproject.toml                 # Project dependencies
+├── agents/                        # Role definitions (YAML frontmatter + instructions)
+├── skills/                        # Domain & workflow skills (*/SKILL.md)
+├── app/
+│   ├── domain/                    # Core entities, WorkUnit pipelines, token cost math
+│   ├── application/               # Stage-gate pipeline engine, cost controller, knowledge service, single-agent routing, ports
+│   ├── adapters/
+│   │   ├── inbound/cli/           # Click CLI & Rich REPL (`chat`, `exec`, `tools`, `pipelines`, `models`, `memory`)
+│   │   └── outbound/              # Antigravity SDK harness, just AST synthesizer, SQLite FTS5/vec0, worktrees, pricing
+│   ├── bootstrap/                 # Hierarchical TOML loader, DI container, agent/skill frontmatter resolvers
+│   └── cli.py                     # CLI console entrypoint (`wintermute`)
+├── tests/
+│   ├── unit/                      # Unit test suite
+│   └── integration/               # Single-agent & CLI integration tests
+├── wintermute.toml                # Pipelines, domain defaults, concurrency locks, budgets & model profiles
+├── pyproject.toml                 # Dependencies & tooling config
+└── justfile                       # Task runner recipes (`just wintermute ...`)
 ```
 
 ---
 
-## Requirements
+## Agent Definitions (`agents/*.md`) & Runtime Config
 
-Before you begin, ensure you have:
-- **uv**: Python package manager
-- **just**: Command runner
-
----
-
-## Environment Configuration
-
-Copy the example configuration:
-```bash
-cp .env.example .env
-```
-And set the required variables:
-- `GEMINI_API_KEY`: Your Google Gemini API key.
-- `FREESIDE_WORKSPACE_ROOT`: Path to the Freeside workspace containing `packages/`, `straylight/`, `installer/`, etc. (defaults to `~/Code/freeside`).
+- **Agent Definitions ([agents/](agents)):** Each role (`tech_lead`, `senior_coder`, `junior_coder`, `troubleshooter`, `researcher`, `reviewer`, `doc_writer`) is defined in `wintermute/agents/<role>.md` with YAML frontmatter controlling `name`, `description`, `read_only`, `skills`, `allowed_subagents`, `allowed_tools` (`@domain`, `@read_only`, exact names, globs), and `denied_tools`, followed by the role's markdown system instructions (auto-resolved; omitted if absent so the SDK default applies). Local overrides can be placed in `.wintermute/agents/<role>.md`.
+- **Runtime Config ([wintermute.toml](wintermute.toml)):** Owns workspace paths, pluggable stage-gate pipelines (`tdd_coding`, `package_lifecycle`, `standard_change`, `investigation_audit`), domain defaults (`[pipeline.domain_defaults]`, `[pipeline.domain_test_targets]`), build lock semaphores, cost budgets, model profiles, and per-role runtime settings (`model`, `max_model_calls`, `max_tool_calls`, `max_total_tokens`). Repository-local overrides go in `.wintermute/config.toml`.
 
 ---
 
-## Command Reference
+## Hybrid Skill System (`skills/*/SKILL.md`)
 
-### 1. Unified Manifest Runner (`wintermute run`)
-Executes declarative Kubernetes-style YAML manifest specifications (`kind: Workflow` or `kind: EventHandler`):
-
-```bash
-# Run a workflow manifest:
-just wintermute run .wintermute/workflows/straylight-check.yaml
-```
-
-### 2. Interactive CLI Menu
-Start the interactive selection prompt:
-```bash
-just wintermute cli
-```
-
-### 3. Check Package Status
-Verifies package lint status, queries OSV CVE feeds, and looks up latest upstream versions:
-```bash
-just wintermute cli check <package-name>
-# Check all workspace packages:
-just wintermute cli check --all
-```
-
-### 4. Component Domain Commands
-Run component domain subcommands directly:
-```bash
-# Fix a package build:
-just wintermute cli fix <package-name>
-
-# Import an Arch Linux package:
-just wintermute cli import <package-name>
-
-# Upgrade package version:
-just wintermute cli upgrade <package-name>
-```
+Wintermute follows the **`agentskills.io`** specification (`name` + `description` frontmatter) and keeps skill scoping simple:
+1. **Role-Scoped SDK Discovery:** Each agent receives only the skill directories listed in `skills` inside `agents/<role>.md` via `skills_paths`.
+2. **Explicit WorkUnit Binding:** A `WorkUnit` can specify `skills` directly (e.g. via `--skill` or `dispatch_work_unit`) to pre-inject those skill instructions into its stage prompts.
 
 ---
 
-## Running Tests
+## Authentication (Google Antigravity SDK)
 
-Run the complete pytest suite:
+Wintermute relies on the **Google Antigravity SDK** (`google-antigravity`):
+- **Google AI Studio (default `gemini` provider):** Copy [../.env-example](../.env-example) to `.env` at the Freeside workspace root and set `GEMINI_API_KEY` (or export it in your shell). Wintermute loads `.env`, `.wintermute/.env`, and `wintermute/.env` automatically via `python-dotenv` without overriding variables already set in your shell.
+- **Vertex AI (`provider = "vertex"` or `vertex = true`):**
+  - *Standard Mode (ADC):* Run `gcloud auth application-default login` and set `project` / `location` on the model profile in [wintermute.toml](wintermute.toml).
+  - *Express Mode:* Set `vertex = true` and `api_key_env` on the model profile.
+- **Local Models (zero credentials):** Configure `provider = "litert"` (`LiteRTAgentConfig`) or `provider = "openai_compat"` (`LocalOpenAIAgentConfig`, e.g. `local_coder` on `http://localhost:8000/v1`) in [wintermute.toml](wintermute.toml).
+
+---
+
+## Commands & Testing
+
+From the Freeside workspace root:
+
 ```bash
-just wintermute tests
+# Inspect pipelines, models, tools, or memory
+just wintermute pipelines
+just wintermute models
+just wintermute tools --role senior_coder --domain packages
+just wintermute memory list
+
+# Run interactive REPL or one-shot prompt execution
+just wintermute chat
+just wintermute exec "Patch CVE in zlib" --domain packages --target zlib
+
+# Run unit & integration tests
+just wintermute test
+
+# Run ruff static checks
+just wintermute lint
+
+# Clean caches
+just wintermute clean
 ```

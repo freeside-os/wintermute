@@ -1,0 +1,195 @@
+[workspace]
+worktrees_dir = ".wintermute/worktrees"
+sessions_dir = ".wintermute/sessions"
+db_path = ".wintermute/wintermute.db"
+agents_dirs = ["wintermute/agents", ".wintermute/agents"]
+skills_dirs = ["wintermute/skills", ".wintermute/skills"]
+sub_repos = [
+    "bootstrap",
+    "packages",
+    "straylight",
+    "docs",
+    "wintermute",
+    "installer",
+    "fstools",
+]
+prefer_btrfs_cow = false # how is this used?
+
+[concurrency]
+max_concurrent_tasks = 2
+max_concurrent_subagents_per_task = 3
+
+[concurrency.build_locks]
+"pkg::build" = 1
+"pkg::build-group" = 1
+"sandbox::build" = 1
+"live::build" = 1
+"live::run" = 1
+
+[cost]
+max_task_usd = 50.00
+max_daily_usd = 100.00
+pause_on_budget_exceeded = true
+pricing_feeds = [
+    "https://models.dev/api.json",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+]
+pricing_cache_ttl_hours = 24
+
+[memory]
+enabled = true
+embedding_model = "gemini-embedding-001"
+embedding_dimensions = 768
+auto_prime_limit = 4
+consolidate_threshold = 5
+
+[server]
+host = "127.0.0.1"
+port = 8420
+
+[pipeline]
+enable_fast_path = false
+default_template = "standard_change"
+
+[pipeline.domain_defaults]
+packages = "package_lifecycle"
+straylight = "tdd_coding"
+installer = "tdd_coding"
+fstools = "tdd_coding"
+wintermute = "tdd_coding"
+docs = "standard_change"
+
+[pipeline.domain_test_targets]
+packages = ["pkg::verify"]
+straylight = ["straylight::test"]
+installer = ["installer::test"]
+fstools = ["fstools::test"]
+wintermute = ["wintermute::test"]
+docs = ["git::status"]
+
+# 1. TDD Coding Pipeline (Rust / Python features & bugfixes)
+[pipeline.templates.tdd_coding]
+description = "Test-Driven Development: write/update tests first, implement, validate, refactor, re-validate if changed, commit."
+max_retries_per_gate = 3
+stages = [
+    { name = "write_tests", kind = "agent", role = "coder", require_file_edits = true, instruction_hint = "Write or update unit/integration tests covering the requirement before implementing production logic." },
+    { name = "implement", kind = "agent", role = "coder", require_file_edits = true, instruction_hint = "Implement the production code to satisfy the tests." },
+    { name = "validate_green", kind = "gate", validators = [
+        "@domain_test",
+    ], on_fail_goto = "implement" },
+    { name = "refactor", kind = "agent", role = "reviewer", pass_git_diff = true, skip_next_gate_if_unmodified = true, instruction_hint = "Review git diff for quality, duplication, and style. Refactor if needed or reply LGTM with no edits." },
+    { name = "validate_refactor", kind = "gate", validators = [
+        "@domain_test",
+    ], on_fail_goto = "implement" },
+    { name = "commit", kind = "commit", capture_knowledge = true },
+]
+
+# 2. Package Lifecycle Pipeline (create, import, upgrade, fix)
+[pipeline.templates.package_lifecycle]
+description = "Freeside packaging flow: fast static manifest/dep verification before heavy sandbox build, troubleshooting loop, compliance review, and commit."
+max_retries_per_gate = 4
+stages = [
+    { name = "scaffold_or_edit", kind = "agent", role = "coder", require_file_edits = true, instruction_hint = "Author or update package.manifest, package.justfile, and patches using Freeside packaging conventions." },
+    { name = "static_verify", kind = "gate", validators = [
+        "pkg::verify",
+        "pkg::resolve",
+    ], on_fail_goto = "scaffold_or_edit" },
+    { name = "sandbox_build", kind = "gate", validators = [
+        "pkg::build",
+    ], on_fail_goto = "troubleshoot_build" },
+    { name = "troubleshoot_build", kind = "agent", role = "troubleshooter", run_only_on_failure = true, attach_build_logs = true, on_complete_goto = "static_verify", instruction_hint = "Diagnose the sandbox build failure using attached logs and memory, apply the fix, and record the lesson." },
+    { name = "compliance_review", kind = "agent", role = "reviewer", pass_git_diff = true, skip_next_gate_if_unmodified = true, instruction_hint = "Audit package diff for dynamic variables, DESTDIR usage, and [build.environment] conventions. Reply LGTM if clean." },
+    { name = "reverify_after_review", kind = "gate", validators = [
+        "pkg::verify",
+        "pkg::build",
+    ], on_fail_goto = "troubleshoot_build" },
+    { name = "commit", kind = "commit", capture_knowledge = true },
+]
+
+# 3. Standard Change Pipeline (docs, justfiles, configs, general edits)
+[pipeline.templates.standard_change]
+description = "Implement -> Validate -> Refactor -> Validate (if modified) -> Commit."
+max_retries_per_gate = 3
+stages = [
+    { name = "implement", kind = "agent", role = "coder", require_file_edits = true },
+    { name = "validate_1", kind = "gate", validators = [
+        "@domain_test",
+    ], on_fail_goto = "implement" },
+    { name = "refactor", kind = "agent", role = "reviewer", pass_git_diff = true, skip_next_gate_if_unmodified = true },
+    { name = "validate_2", kind = "gate", validators = [
+        "@domain_test",
+    ], on_fail_goto = "implement" },
+    { name = "commit", kind = "commit" },
+]
+
+# 4. Read-Only Investigation / Audit Pipeline
+[pipeline.templates.investigation_audit]
+description = "Read-only research, CVE auditing, and diagnostic report synthesis."
+max_retries_per_gate = 1
+stages = [
+    { name = "research", kind = "agent", role = "researcher", read_only = true },
+    { name = "synthesize", kind = "agent", role = "reviewer", read_only = true },
+]
+
+[models.argon]
+provider = "gemini"
+model = "gemini-4-argon"
+thinking_level = "medium"
+
+[models.hydrogen]
+provider = "gemini"
+model = "gemini-4-hydrogen"
+thinking_level = "medium"
+
+[models.flash]
+provider = "gemini"
+model = "gemini-3.8-flash"
+thinking_level = "medium"
+
+# [models.local_coder]
+# provider = "openai_compat"
+# model = "Qwen/Qwen2.5-Coder-32B-Instruct"
+# base_url = "http://localhost:8000/v1"
+# lightweight = true
+
+[agents.tech_lead]
+model = "argon"
+max_model_calls = 40
+max_tool_calls = 80
+max_total_tokens = 500_000
+
+[agents.senior_coder]
+model = "hydrogen"
+max_model_calls = 30
+max_tool_calls = 60
+max_total_tokens = 300_000
+
+[agents.junior_coder]
+model = "flash"
+max_model_calls = 20
+max_tool_calls = 40
+max_total_tokens = 150_000
+
+[agents.troubleshooter]
+model = "hydrogen"
+max_model_calls = 25
+max_tool_calls = 50
+max_total_tokens = 250_000
+
+[agents.researcher]
+model = "flash"
+max_model_calls = 15
+max_tool_calls = 30
+max_total_tokens = 150_000
+
+[agents.reviewer]
+model = "hydrogen"
+max_model_calls = 12
+max_tool_calls = 20
+max_total_tokens = 150_000
+
+[agents.doc_writer]
+model = "flash"
+max_model_calls = 15
+max_tool_calls = 30
+max_total_tokens = 150_000
