@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from rich import box
@@ -68,17 +68,21 @@ def render_cost_panel(
     max_task_usd: float,
     daily_usd_spent: float = 0.0,
     max_daily_usd: float | None = None,
+    monthly_usd_spent: float = 0.0,
+    month_label: str | None = None,
 ) -> Panel:
-    """Render task and daily spend vs configured budget limits and remaining balance."""
+    """Render session, daily, and monthly spend vs configured budget limits and remaining balance."""
+    month_suffix = f" ({month_label})" if month_label else ""
     if task is None:
         lines = [
-            "[dim]No active task yet.[/dim]",
-            _format_budget_line("Task Budget", spent=0.0, limit=max_task_usd),
+            "[dim]No active session yet.[/dim]",
+            _format_budget_line("Session Budget", spent=0.0, limit=max_task_usd),
         ]
         if max_daily_usd is not None:
             lines.append(
                 _format_budget_line("Daily Budget", spent=daily_usd_spent, limit=max_daily_usd)
             )
+        lines.append(f"Monthly Spend{month_suffix}: [bold]${monthly_usd_spent:.4f}[/bold] USD")
         return Panel(
             "\n".join(lines),
             title="Cost & Budget",
@@ -89,9 +93,9 @@ def render_cost_panel(
     effective_limit = base_limit + task.extra_usd_granted
     topup_note = f"+${task.extra_usd_granted:.2f} top-up" if task.extra_usd_granted > 0 else ""
     lines = [
-        f"Task: [bold]{task.id}[/bold] ({task.status.value})",
+        f"Session: [bold]{task.id}[/bold] ({task.status.value})",
         _format_budget_line(
-            "Task Budget",
+            "Session Budget",
             spent=total_usd,
             limit=effective_limit,
             extra_note=topup_note,
@@ -101,6 +105,7 @@ def render_cost_panel(
         lines.append(
             _format_budget_line("Daily Budget", spent=daily_usd_spent, limit=max_daily_usd)
         )
+    lines.append(f"Monthly Spend{month_suffix}: [bold]${monthly_usd_spent:.4f}[/bold] USD")
     lines.append(
         f"Tokens: total={usage.total_tokens:,} "
         f"(in={usage.prompt_tokens:,}, cached={usage.cached_tokens:,}, "
@@ -313,9 +318,15 @@ def render_session_resume_panel(
     messages: Sequence[TaskMessage],
     *,
     total_usd: float,
+    usage: TokenUsage | None = None,
+    max_task_usd: float | None = None,
+    per_role_usd: Mapping[str, float] | None = None,
+    work_unit_costs: Mapping[str, tuple[float, int]] | None = None,
+    orchestration_cost: tuple[float, int] | None = None,
     max_messages: int = 8,
+    max_work_units: int | None = 5,
 ) -> Panel:
-    """Render a compact recap of session state and transcript when resuming."""
+    """Render a compact recap of session state, costs, WorkUnits, and transcript."""
     text = Text()
     text.append("  Session: ", style="cyan bold")
     text.append(f"{task.id}", style="bold white")
@@ -323,21 +334,62 @@ def render_session_resume_panel(
     text.append("  Updated: ", style="cyan bold")
     text.append(
         f"{task.updated_at.replace('T', ' ')[:19]} UTC | "
-        f"Domain: {task.domain or 'auto'} | Spend: ${total_usd:.4f}\n",
+        f"Domain: {task.domain or 'auto'}\n",
         style="dim",
     )
+    text.append("  Session Cost: ", style="cyan bold")
+    text.append(f"${total_usd:.4f} USD", style="bold white")
+    if max_task_usd is not None:
+        base_limit = task.max_usd if task.max_usd is not None else max_task_usd
+        effective_limit = base_limit + task.extra_usd_granted
+        left = max(0.0, effective_limit - total_usd)
+        topup_note = f", +${task.extra_usd_granted:.2f} top-up" if task.extra_usd_granted > 0 else ""
+        text.append(f" / ${effective_limit:.2f} limit (", style="dim")
+        text.append(f"${left:.4f} left", style="red" if left <= 0 else "green")
+        text.append(f"{topup_note})", style="dim")
+    if usage is not None and usage.total_tokens > 0:
+        text.append(
+            f" | {usage.total_tokens:,} tokens "
+            f"(in={usage.prompt_tokens:,}, out={usage.candidate_tokens:,}, cached={usage.cached_tokens:,})",
+            style="dim",
+        )
+    text.append("\n")
+    if per_role_usd:
+        role_summary = ", ".join(
+            f"{role}: ${cost:.4f}" for role, cost in sorted(per_role_usd.items())
+        )
+        text.append("  By Role: ", style="cyan bold")
+        text.append(f"{role_summary}\n", style="dim")
     if task.worktree_path:
         text.append("  Worktree:", style="cyan bold")
         text.append(f" {task.worktree_path}\n", style="dim")
 
     if work_units:
-        text.append("  WorkUnits:\n", style="cyan bold")
-        for wu in work_units[-5:]:
+        shown_wus = work_units if max_work_units is None else work_units[-max_work_units:]
+        hidden_wus = len(work_units) - len(shown_wus)
+        wu_header = (
+            f"  WorkUnits (last {len(shown_wus)} of {len(work_units)}):\n"
+            if hidden_wus > 0
+            else f"  WorkUnits ({len(work_units)}):\n"
+        )
+        text.append(wu_header, style="cyan bold")
+        for wu in shown_wus:
             stage_info = wu.current_stage_name or "pending"
+            wu_usd, wu_tokens = (work_unit_costs or {}).get(wu.id, (0.0, 0))
+            token_suffix = f", {wu_tokens:,} tokens" if wu_tokens > 0 else ""
             text.append(
-                f"    • {wu.id}: [{wu.status}] {wu.domain}/{wu.target or 'general'} (stage={stage_info})\n",
+                f"    • {wu.id}: [{wu.status}] {wu.domain}/{wu.target or 'general'} "
+                f"(stage={stage_info}) — ${wu_usd:.4f}{token_suffix}\n",
                 style="white",
             )
+        if orchestration_cost is not None:
+            orch_usd, orch_tokens = orchestration_cost
+            if orch_usd > 0 or orch_tokens > 0:
+                orch_tok_suffix = f", {orch_tokens:,} tokens" if orch_tokens > 0 else ""
+                text.append(
+                    f"    • orchestration / direct: ${orch_usd:.4f}{orch_tok_suffix}\n",
+                    style="dim",
+                )
 
     if messages:
         recent = messages[-max_messages:]
@@ -370,19 +422,19 @@ def render_help_panel() -> Panel:
     """Render interactive REPL slash command reference."""
     text = Text()
     commands = [
-        ("/status", "Show active session task, workspace, and work unit status"),
-        ("/sessions [n]", "List stored sessions across restarts (* = active)"),
-        ("/resume <sel>", "Switch/resume stored session by ID, prefix, #index, or latest"),
+        ("/status [id]", "Show active or specified session, workspace, and work unit status"),
+        ("/sessions [n|<id>|delete <id>]", "List, inspect, rename, resume, or delete sessions (* = active)"),
+        ("/resume <id>", "Switch/resume stored session by SessionID, prefix, #index, or latest"),
         ("/rename <title>", "Rename the active session title"),
         ("/pipeline", "Render the active or default pipeline stage stepper"),
-        ("/fast-path [on|off]", "Opt into fast-path execution (skip initial Tech Lead turn)"),
-        ("/new", "Start a new session Task & fresh Tech Lead conversation"),
+        ("/fast-path [on|off]", "Opt into fast-path execution (skip initial Coordinator turn)"),
+        ("/new", "Start a new session & fresh Coordinator conversation"),
         ("/history [n]", "Show previously sent messages (also ↑/↓ arrows at prompt)"),
         ("/retry [n]", "Re-run the last sent message or history item #n"),
         ("/wu-resume [id] [hint]", "Resume incomplete WorkUnit from its paused/failed stage"),
         ("/wu-retry [id] [hint]", "Retry a WorkUnit from stage 0 (clears stage/gate progress)"),
-        ("/cost", "Show task & daily USD spend, limits, remaining balance, and tokens"),
-        ("/budget +<amt> | daily [+]<amt>", "Grant task USD budget or set/add daily USD limit"),
+        ("/cost [id]", "Show session, daily, & monthly USD spend, limits, and tokens"),
+        ("/budget +<amt> | daily [+]<amt>", "Grant session USD budget or set/add daily USD limit"),
         ("/diff", "Show git status & diff stats in the workspace/worktree"),
         ("/tools [role] [domain]", "List synthesized tools for a role/domain"),
         ("/memory [query]", "Search or list knowledge base entries"),
@@ -390,7 +442,7 @@ def render_help_panel() -> Panel:
         ("/exit | /quit", "Exit interactive chat"),
     ]
     for cmd, desc in commands:
-        text.append(f"  {cmd:<24}", style="cyan bold")
+        text.append(f"  {cmd:<32}", style="cyan bold")
         text.append(f"{desc}\n", style="white")
     return Panel(text, title="Interactive REPL Commands", border_style="green", box=box.ROUNDED)
 
@@ -400,14 +452,14 @@ def render_chat_welcome_panel(
 ) -> Panel:
     """Render concise session, routing & command quick-guide when opening chat."""
     mode_label = (
-        "fast_path active (skips initial Tech Lead turn)"
+        "fast_path active (skips initial Coordinator turn)"
         if fast_path
-        else "Tech Lead default (plans, converses, or delegates WorkUnits / fast_path)"
+        else "Coordinator default (converses, routes WorkUnits, or escalates to Tech Lead)"
     )
     text = Text()
     text.append("  Session:  ", style="cyan bold")
     text.append(
-        "All messages share one Task & are stored across restarts (`chat -c`, `/sessions`, `/resume`, `/new`).\n",
+        "All messages share one Session & are stored across restarts (`chat -c`, `/sessions`, `/resume`, `/new`).\n",
         style="white",
     )
     text.append("  Routing:  ", style="cyan bold")
@@ -419,7 +471,7 @@ def render_chat_welcome_panel(
     text.append("--fast-path", style="yellow")
     text.append(", or toggle ", style="white")
     text.append("/fast-path on", style="cyan bold")
-    text.append(" to skip Tech Lead.\n", style="white")
+    text.append(" to skip Coordinator.\n", style="white")
     text.append("  Options:  ", style="cyan bold")
     text.append(
         "--continue (-c)  --resume <id|latest>  --domain <repo>  --pipeline <tpl>  --no-worktree  --fast-path\n",

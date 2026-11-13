@@ -88,7 +88,6 @@ class ModelProfile:
     alias: str
     provider: str
     model: str
-    thinking_level: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
     vertex: bool = False
@@ -181,6 +180,8 @@ class AgentRoleConfig:
     max_tool_calls: int = 60
     max_total_tokens: int = 300_000
     read_only: bool = False
+    thinking_level: str | None = None
+    compaction_token_threshold: int | None = None
     skills: tuple[str, ...] = ()
     allowed_subagents: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
@@ -628,7 +629,6 @@ def load_config(
             alias=alias,
             provider=str(m_dict.get("provider", "gemini")),
             model=str(m_dict.get("model", "gemini-3.8-flash")),
-            thinking_level=m_dict.get("thinking_level"),
             base_url=m_dict.get("base_url"),
             api_key_env=m_dict.get("api_key_env"),
             vertex=bool(m_dict.get("vertex", False)),
@@ -647,6 +647,16 @@ def load_config(
             agents_dirs=workspace.agents_dirs,
             workspace_root=root,
         )
+        raw_thinking = (
+            a_dict.get("thinking_level")
+            if a_dict.get("thinking_level") is not None
+            else fm.get("thinking_level")
+        )
+        raw_compaction = (
+            a_dict.get("compaction_token_threshold")
+            if a_dict.get("compaction_token_threshold") is not None
+            else fm.get("compaction_token_threshold")
+        )
         agents[role_name] = AgentRoleConfig(
             role=role_name,
             model=str(a_dict.get("model", "flash")),
@@ -656,6 +666,10 @@ def load_config(
             max_tool_calls=int(a_dict.get("max_tool_calls", 60)),
             max_total_tokens=int(a_dict.get("max_total_tokens", 300_000)),
             read_only=bool(fm.get("read_only", a_dict.get("read_only", False))),
+            thinking_level=str(raw_thinking).strip() if raw_thinking is not None else None,
+            compaction_token_threshold=(
+                int(raw_compaction) if raw_compaction is not None else None
+            ),
             skills=tuple(
                 str(x) for x in fm.get("skills", a_dict.get("skills", ()))
             ),

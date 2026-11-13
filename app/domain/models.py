@@ -54,6 +54,7 @@ class StageKind(StrEnum):
 
 
 class AgentRole(StrEnum):
+    COORDINATOR = "coordinator"
     TECH_LEAD = "tech_lead"
     SENIOR_CODER = "senior_coder"
     JUNIOR_CODER = "junior_coder"

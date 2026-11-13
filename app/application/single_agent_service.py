@@ -337,7 +337,7 @@ class SingleAgentService:
         if task_id:
             task = await self._storage.get_task(task_id)
             if task is None:
-                raise KeyError(f"Task '{task_id}' not found")
+                raise KeyError(f"Session '{task_id}' not found")
             is_follow_up = True
             if effective_prompt and effective_prompt != task.prompt:
                 task.prompt = f"{task.prompt}\n\nFollow-up: {effective_prompt}"
@@ -553,7 +553,7 @@ class SingleAgentService:
             raise KeyError(f"WorkUnit '{work_unit_id}' not found")
         task = await self._storage.get_task(work_unit.task_id)
         if task is None:
-            raise KeyError(f"Parent Task '{work_unit.task_id}' for WorkUnit '{work_unit_id}' not found")
+            raise KeyError(f"Parent Session '{work_unit.task_id}' for WorkUnit '{work_unit_id}' not found")
 
         reset_all = from_start or work_unit.status == "COMPLETED"
         if reset_all:
@@ -818,11 +818,13 @@ class SingleAgentService:
         use_worktree: bool | None = None,
         interaction_callback: InteractionCallback | None = None,
     ) -> tuple[list[WorkUnit], list[str], bool, str]:
+        has_coordinator = AgentRole.COORDINATOR.value in self._config.agents
+        route_mode = "coordinator" if has_coordinator else "tech_lead"
         if event_callback:
             event_callback(
                 "route",
                 {
-                    "mode": "tech_lead",
+                    "mode": route_mode,
                     "domains": route.sub_domains,
                     "pipeline_template": route.pipeline_template,
                 },
@@ -834,9 +836,10 @@ class SingleAgentService:
         ]
         fast_path_ids: set[str] = set()
         lead_text = ""
+        stage_history: list[str] = []
 
-        # On a fresh turn (no pending paused WorkUnits waiting to resume), let Tech Lead
-        # converse with the user or dispatch WorkUnits / fast-path execution.
+        # On a fresh turn (no pending paused WorkUnits waiting to resume), let Coordinator
+        # converse, dispatch fast-path WorkUnits, or escalate complex asks to Tech Lead.
         if not queued_units or is_follow_up:
             dispatched_this_turn: list[WorkUnit] = []
             on_dispatch = self._make_dispatch_collector(
@@ -846,29 +849,93 @@ class SingleAgentService:
                 default_skills=route.skills,
                 fast_path_ids=fast_path_ids,
             )
-            lead_text = await self._run_tech_lead_decomposition(
-                task,
-                route,
-                turn_prompt=turn_prompt,
-                is_follow_up=is_follow_up,
-                dispatch_callback=on_dispatch,
-                model_override=model_override,
-                use_worktree=use_worktree,
-                interaction_callback=interaction_callback,
-                event_callback=event_callback,
-            )
+            escalated_to_lead = False
+
+            async def _on_escalate(
+                *,
+                brief: str,
+                domain: str = "",
+                target: str = "",
+            ) -> str:
+                nonlocal escalated_to_lead
+                escalated_to_lead = True
+                before_count = len(dispatched_this_turn)
+                effective_domain = domain.strip() or route.domain
+                effective_brief = (
+                    f"{brief.strip()}\n\nTarget hint: {target.strip()}"
+                    if target.strip()
+                    else brief.strip()
+                )
+                lead_reply = await self._run_tech_lead_decomposition(
+                    task,
+                    route,
+                    turn_prompt=effective_brief or turn_prompt,
+                    domain_override=effective_domain,
+                    is_follow_up=False,
+                    dispatch_callback=on_dispatch,
+                    model_override=model_override,
+                    conversation_id=None,
+                    use_worktree=use_worktree,
+                    interaction_callback=interaction_callback,
+                    event_callback=event_callback,
+                )
+                added = dispatched_this_turn[before_count:]
+                if added:
+                    summary_lines = [
+                        f"- {wu.id}: {wu.domain}/{wu.target or 'general'} ({wu.pipeline_template})"
+                        for wu in added
+                    ]
+                    return (
+                        f"Tech Lead dispatched {len(added)} WorkUnit(s):\n"
+                        + "\n".join(summary_lines)
+                        + (f"\n\nTech Lead notes: {lead_reply.strip()}" if lead_reply.strip() else "")
+                    )
+                return lead_reply.strip() or "Tech Lead completed without dispatching WorkUnits."
+
+            if has_coordinator:
+                stage_history.append("coordinator_turn")
+                lead_text = await self._run_coordinator_turn(
+                    task,
+                    route,
+                    turn_prompt=turn_prompt,
+                    is_follow_up=is_follow_up,
+                    dispatch_callback=on_dispatch,
+                    escalate_callback=_on_escalate,
+                    model_override=model_override,
+                    use_worktree=use_worktree,
+                    interaction_callback=interaction_callback,
+                    event_callback=event_callback,
+                )
+                if escalated_to_lead:
+                    stage_history.append("tech_lead_turn")
+            else:
+                stage_history.append("tech_lead_turn")
+                lead_text = await self._run_tech_lead_decomposition(
+                    task,
+                    route,
+                    turn_prompt=turn_prompt,
+                    is_follow_up=is_follow_up,
+                    dispatch_callback=on_dispatch,
+                    model_override=model_override,
+                    conversation_id=task.conversation_id,
+                    use_worktree=use_worktree,
+                    interaction_callback=interaction_callback,
+                    event_callback=event_callback,
+                )
+
             if task.status == TaskStatus.PAUSED_BUDGET:
                 await self._finalize_task_status(task, [], lead_text)
-                return existing, ["tech_lead_turn"], False, lead_text
+                return existing, stage_history, False, lead_text
             if not dispatched_this_turn and not queued_units:
-                # Conversational / planning turn with Tech Lead: no WorkUnit execution requested.
-                summary = lead_text.strip() or "Tech Lead turn completed."
+                # Conversational / planning turn without WorkUnit execution.
+                summary = lead_text.strip() or "Session turn completed."
                 await self._finalize_task_status(task, [], summary)
-                return existing, ["tech_lead_turn"], True, summary
+                return existing, stage_history, True, summary
             queued_units.extend(dispatched_this_turn)
+        else:
+            stage_history.append("coordinator_turn" if has_coordinator else "tech_lead_turn")
 
         outcomes: list[PipelineRunResult] = []
-        stage_history: list[str] = ["tech_lead_turn"]
         summaries: list[str] = []
 
         for wu in queued_units:
@@ -932,22 +999,26 @@ class SingleAgentService:
         await self._finalize_task_status(task, outcomes, combined_summary)
         return await self._storage.list_work_units(task.id), stage_history, all_completed, combined_summary
 
-    async def _invoke_tech_lead_turn(
+    async def _invoke_orchestrator_turn(
         self,
         task: Task,
         *,
+        role: AgentRole,
         stage_name: str,
         domain: str,
         prompt: str,
         work_unit: WorkUnit | None = None,
         dispatch_callback: Any = None,
+        escalate_callback: Any = None,
         model_override: str | None = None,
+        thinking_level_override: str | None = None,
+        conversation_id: str | None = None,
+        persist_conversation_id: bool = False,
         use_worktree: bool | None = None,
         interaction_callback: InteractionCallback | None = None,
         event_callback: EventCallback | None = None,
     ) -> str:
-        """Shared Tech Lead execution helper for planning decomposition and escalation recovery."""
-        role = AgentRole.TECH_LEAD
+        """Shared orchestrator execution helper for Coordinator and Tech Lead turns."""
         role_cfg = self._config.agents[role.value]
         model_profile = self._config.models[model_override or role_cfg.model]
         wt_kwargs: dict[str, Any] = {}
@@ -968,6 +1039,7 @@ class SingleAgentService:
             domain=domain,
             task_id=task.id,
             dispatch_callback=dispatch_callback,
+            escalate_callback=escalate_callback,
         )
         run_id = new_id("run")
         turn = await self._harness.run_stage_turn(
@@ -979,11 +1051,16 @@ class SingleAgentService:
             worktree_path=wt_info.root_path,
             read_only=role_cfg.read_only,
             model_override=model_override,
-            conversation_id=task.conversation_id,
+            thinking_level_override=thinking_level_override,
+            conversation_id=conversation_id,
             interaction_callback=interaction_callback,
             event_callback=event_callback,
         )
-        if turn.conversation_id and turn.conversation_id != task.conversation_id:
+        if (
+            persist_conversation_id
+            and turn.conversation_id
+            and turn.conversation_id != task.conversation_id
+        ):
             task.conversation_id = turn.conversation_id
             await self._storage.upsert_task(task)
         entry, _ = await self._cost_controller.record_turn_usage(
@@ -1015,7 +1092,7 @@ class SingleAgentService:
         )
         return turn.response_text
 
-    async def _run_tech_lead_decomposition(
+    async def _run_coordinator_turn(
         self,
         task: Task,
         route: RequestRoute,
@@ -1023,6 +1100,7 @@ class SingleAgentService:
         turn_prompt: str | None = None,
         is_follow_up: bool = False,
         dispatch_callback: Any = None,
+        escalate_callback: Any = None,
         model_override: str | None = None,
         use_worktree: bool | None = None,
         interaction_callback: InteractionCallback | None = None,
@@ -1039,27 +1117,85 @@ class SingleAgentService:
         if is_follow_up:
             prompt = (
                 f"User follow-up in this session:\n{msg}\n\n"
+                f"Respond directly if this is Q&A/clarification, call "
+                f"`dispatch_work_unit(..., fast_path=True)` for a simple single-unit change, "
+                f"or gather key context and call `escalate_to_tech_lead(brief=...)` for complex planning."
+            )
+        else:
+            prompt = (
+                f"Session task ask (detected domains: {', '.join(route.sub_domains)}, "
+                f"suggested pipeline: {route.pipeline_template}, complexity: {route.complexity}):\n{msg}\n\n"
+                f"You are the root Coordinator for this session:\n"
+                f"- If this is a question, status check, or discussion, inspect concisely (or invoke `researcher` "
+                f"for broad reads) and reply directly without dispatching.\n"
+                f"- If it is a clear single-unit ask ready to execute, call `dispatch_work_unit(..., fast_path=True)`.\n"
+                f"- If it requires multi-repo/multi-package decomposition, architecture design, or resolving ambiguity, "
+                f"collect key facts and call `escalate_to_tech_lead(brief=...)` with a concise structured brief."
+            )
+        return await self._invoke_orchestrator_turn(
+            task,
+            role=AgentRole.COORDINATOR,
+            stage_name="coordinator",
+            domain=route.domain,
+            prompt=prompt,
+            dispatch_callback=dispatch_callback,
+            escalate_callback=escalate_callback,
+            model_override=model_override,
+            conversation_id=task.conversation_id,
+            persist_conversation_id=True,
+            use_worktree=use_worktree,
+            interaction_callback=interaction_callback,
+            event_callback=event_callback,
+        )
+
+    async def _run_tech_lead_decomposition(
+        self,
+        task: Task,
+        route: RequestRoute,
+        *,
+        turn_prompt: str | None = None,
+        domain_override: str | None = None,
+        is_follow_up: bool = False,
+        dispatch_callback: Any = None,
+        model_override: str | None = None,
+        conversation_id: str | None = None,
+        use_worktree: bool | None = None,
+        interaction_callback: InteractionCallback | None = None,
+        event_callback: EventCallback | None = None,
+    ) -> str:
+        verdict = await self._cost_controller.check_budget(task)
+        if not verdict.allowed:
+            if self._config.cost.policy.pause_on_budget_exceeded:
+                task.status = TaskStatus.PAUSED_BUDGET
+                await self._storage.upsert_task(task)
+            return verdict.reason
+
+        msg = (turn_prompt or task.prompt).strip()
+        effective_domain = domain_override or route.domain
+        if is_follow_up:
+            prompt = (
+                f"User follow-up in this session:\n{msg}\n\n"
                 f"Respond directly if this is discussion/clarification, or call "
                 f"`dispatch_work_unit(..., fast_path=True|False)` when ready to execute work."
             )
         else:
             prompt = (
-                f"Session task ask (detected domains: {', '.join(route.sub_domains)}, "
+                f"Escalated planning brief (detected domains: {', '.join(route.sub_domains)}, "
                 f"suggested pipeline: {route.pipeline_template}):\n{msg}\n\n"
-                f"You lead this session Task:\n"
-                f"- If this is a question, discussion, or needs planning/clarification, inspect with "
-                f"read-only tools and reply directly without calling `dispatch_work_unit`.\n"
-                f"- If it is ready for single-unit execution, call `dispatch_work_unit(..., fast_path=True)`.\n"
-                f"- If it spans multiple components/packages/repos, decompose it into scoped `WorkUnit`s "
-                f"(for `packages` edits, each `target` must be a single package under `packages/<pkg>`)."
+                f"Decompose into scoped `WorkUnit`s via `dispatch_work_unit` "
+                f"(for `packages` edits, each `target` must be a single package under `packages/<pkg>`), "
+                f"or return a clear clarification/plan if user input is needed."
             )
-        return await self._invoke_tech_lead_turn(
+        return await self._invoke_orchestrator_turn(
             task,
+            role=AgentRole.TECH_LEAD,
             stage_name="tech_lead",
-            domain=route.domain,
+            domain=effective_domain,
             prompt=prompt,
             dispatch_callback=dispatch_callback,
             model_override=model_override,
+            conversation_id=conversation_id,
+            persist_conversation_id=bool(conversation_id),
             use_worktree=use_worktree,
             interaction_callback=interaction_callback,
             event_callback=event_callback,
@@ -1099,14 +1235,18 @@ class SingleAgentService:
             f"2. If user clarification or manual intervention is genuinely required, do not dispatch "
             f"and instead provide a clear diagnosis and concrete recovery plan."
         )
-        text = await self._invoke_tech_lead_turn(
+        text = await self._invoke_orchestrator_turn(
             task,
+            role=AgentRole.TECH_LEAD,
             stage_name="tech_lead_escalation",
             domain=work_unit.domain,
             prompt=prompt,
             work_unit=work_unit,
             dispatch_callback=on_dispatch,
             model_override=model_override,
+            thinking_level_override="high" if model_override is None else None,
+            conversation_id=None,
+            persist_conversation_id=False,
             use_worktree=use_worktree,
             interaction_callback=interaction_callback,
             event_callback=event_callback,
@@ -1181,13 +1321,38 @@ class SingleAgentService:
 
     async def get_task_cost_breakdown(self, task_id: str) -> tuple[float, TokenUsage, dict[str, float]]:
         """Return (total_usd, token_usage, per_role_usd) for a task."""
+        total_usd, usage, per_role, _, _ = await self.get_task_detailed_cost_breakdown(task_id)
+        return total_usd, usage, per_role
+
+    async def get_task_detailed_cost_breakdown(
+        self, task_id: str
+    ) -> tuple[
+        float,
+        TokenUsage,
+        dict[str, float],
+        dict[str, tuple[float, int]],
+        tuple[float, int],
+    ]:
+        """Return (total_usd, token_usage, per_role_usd, per_wu_usd_tokens, orchestration_usd_tokens)."""
         total_usd = await self._storage.get_task_usd_spent(task_id)
         usage = await self._storage.get_task_token_usage(task_id)
         runs = await self._storage.list_subagent_runs(task_id)
         per_role: dict[str, float] = {}
+        per_wu: dict[str, tuple[float, int]] = {}
+        orch_usd = 0.0
+        orch_tokens = 0
         for run in runs:
             per_role[run.role.value] = per_role.get(run.role.value, 0.0) + run.usd_cost
-        return total_usd, usage, per_role
+            if run.work_unit_id:
+                prev_usd, prev_tokens = per_wu.get(run.work_unit_id, (0.0, 0))
+                per_wu[run.work_unit_id] = (
+                    prev_usd + run.usd_cost,
+                    prev_tokens + run.total_tokens,
+                )
+            else:
+                orch_usd += run.usd_cost
+                orch_tokens += run.total_tokens
+        return total_usd, usage, per_role, per_wu, (orch_usd, orch_tokens)
 
     def has_sdk_session(self, conversation_id: str | None) -> bool:
         """Return True when the Antigravity SDK session DB exists on disk."""

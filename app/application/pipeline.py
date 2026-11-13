@@ -33,6 +33,7 @@ from app.domain.models import (
     new_id,
     utcnow_iso,
 )
+from app.domain.text_compaction import compact_command_output, compact_diff_output
 
 
 @dataclass(slots=True)
@@ -163,10 +164,16 @@ class WorkUnitPipelineEngine:
             sections.append(f"Objective:\n{base_prompt}")
 
         if self.knowledge is not None and not stage.read_only:
+            prime_limit = (
+                min(2, self.config.memory.auto_prime_limit)
+                if work_unit.complexity == "simple"
+                else self.config.memory.auto_prime_limit
+            )
             primed = await self.knowledge.prime_context(
                 domain=work_unit.domain,
                 target=work_unit.target,
                 query=f"{work_unit.target or ''} {last_failure_output or base_prompt}",
+                limit=prime_limit,
             )
             if primed:
                 sections.append(primed)
@@ -178,12 +185,16 @@ class WorkUnitPipelineEngine:
                 else None
             )
             diff_text = await self.worktree.get_git_diff(task.id, sub_repos=sub_repos)
+            compacted_diff = compact_diff_output(diff_text, max_chars=24_000)
             sections.append(
-                f"Git Diff to Review:\n```diff\n{diff_text or '(no diff)'}\n```"
+                f"Git Diff to Review:\n```diff\n{compacted_diff or '(no diff)'}\n```"
             )
 
         if last_failure_output and (stage.attach_build_logs or stage.kind == StageKind.AGENT):
-            sections.append(f"Previous Validation/Gate Failure Output:\n{last_failure_output}")
+            compacted_failure = compact_command_output(
+                last_failure_output, max_chars=12_000
+            )
+            sections.append(f"Previous Validation/Gate Failure Output:\n{compacted_failure}")
 
         if stage.attach_build_logs and work_unit.domain == "packages" and work_unit.target:
             _, logs_output = await self.just_tools.run_validator(
@@ -194,8 +205,9 @@ class WorkUnitPipelineEngine:
             )
             cleaned_logs = logs_output.strip()
             if cleaned_logs and "not found in justfiles" not in cleaned_logs:
+                compacted_logs = compact_command_output(cleaned_logs, max_chars=12_000)
                 sections.append(
-                    f"Extracted Package Build Logs ({work_unit.target}):\n{cleaned_logs}"
+                    f"Extracted Package Build Logs ({work_unit.target}):\n{compacted_logs}"
                 )
 
         return "\n\n".join(sections)
@@ -405,16 +417,13 @@ class WorkUnitPipelineEngine:
                     read_only=effective_read_only,
                     stop_gate=_stop_gate if stage.require_file_edits else None,
                     model_override=model_override,
-                    conversation_id=task.conversation_id,
+                    conversation_id=None,
                     pre_write_callback=(
                         None if effective_read_only else _pre_write_materialize
                     ),
                     interaction_callback=interaction_callback,
                     event_callback=event_callback,
                 )
-                if turn.conversation_id and turn.conversation_id != task.conversation_id:
-                    task.conversation_id = turn.conversation_id
-                    await self.storage.upsert_task(task)
 
                 after_mtime = await self.worktree.get_latest_mtime(
                     task.id, domain=work_unit.domain

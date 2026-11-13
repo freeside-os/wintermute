@@ -22,7 +22,7 @@ def test_load_default_wintermute_toml():
     assert cfg.pipeline.domain_defaults["docs"] == "standard_change"
 
     pkg_tpl = cfg.pipeline.templates["package_lifecycle"]
-    assert pkg_tpl.max_retries_per_gate == 4
+    assert pkg_tpl.max_retries_per_gate == 3
     stage_names = [s.name for s in pkg_tpl.stages]
     assert stage_names == [
         "scaffold_or_edit",
@@ -67,13 +67,19 @@ def test_agent_instructions_autoresolve_override_and_sdk_default(tmp_path: Path)
     repo_cfg = load_config(workspace_root=repo_root)
 
     # 1. Auto-resolves wintermute/agents/<role>.md frontmatter + body when agent_file is omitted
+    assert "coordinator" in repo_cfg.agents
     assert "troubleshooter" in repo_cfg.agents
     assert "doc_writer" in repo_cfg.agents
-    assert "troubleshooter" in repo_cfg.agents["tech_lead"].allowed_subagents
-    assert "doc_writer" in repo_cfg.agents["tech_lead"].allowed_subagents
+    assert "researcher" in repo_cfg.agents["coordinator"].allowed_subagents
+    assert "escalate_to_tech_lead" in repo_cfg.agents["coordinator"].allowed_tools
     assert "dispatch_work_unit" in repo_cfg.agents["tech_lead"].allowed_tools
+    assert repo_cfg.agents["tech_lead"].allowed_subagents == ()
+    assert repo_cfg.agents["coordinator"].thinking_level == "low"
+    assert repo_cfg.agents["tech_lead"].thinking_level == "medium"
+    assert repo_cfg.agents["tech_lead"].compaction_token_threshold == 60_000
     assert repo_cfg.agents["researcher"].read_only is True
-    assert "run_command" in repo_cfg.agents["researcher"].denied_tools
+    assert "run_command" in repo_cfg.agents["researcher"].allowed_tools
+    assert "run_command" not in repo_cfg.agents["researcher"].denied_tools
     assert "run_command" in repo_cfg.agents["doc_writer"].denied_tools
     troubleshooter_prompt = repo_cfg.resolve_agent_instructions("troubleshooter")
     assert troubleshooter_prompt is not None
@@ -184,26 +190,40 @@ def test_sdk_capabilities_subagents_and_lightweight_openai(tmp_path: Path):
     repo_cfg = load_config(workspace_root=repo_root)
     harness = AntigravityHarnessAdapter(config=repo_cfg)
 
-    # 1. tech_lead enables navigation builtins + ask_question + validated subagents
+    # 1. coordinator enables navigation builtins + ask_question + researcher subagent
     async def _dummy_interact(_qs):
         return []
 
+    coord_cfg = harness.build_sdk_agent_config(
+        role=AgentRole.COORDINATOR,
+        tools=[],
+        worktree_path=str(repo_root),
+        interaction_callback=_dummy_interact,
+    )
+    enabled = set(coord_cfg.capabilities.enabled_tools or ())
+    assert types.BuiltinTools.LIST_DIR in enabled
+    assert types.BuiltinTools.SEARCH_DIR in enabled
+    assert types.BuiltinTools.FIND_FILE in enabled
+    assert types.BuiltinTools.ASK_QUESTION in enabled
+    assert types.BuiltinTools.INVOKE_SUBAGENT in enabled
+    assert coord_cfg.capabilities.enable_subagents is True
+    assert coord_cfg.capabilities.agent_behavior == types.AgentBehavior.INTERACTIVE
+    subagent_names = {s.name for s in (coord_cfg.subagents or ())}
+    assert subagent_names == {"researcher"}
+    assert set(coord_cfg.capabilities.allowed_subagents or ()) == subagent_names
+    assert coord_cfg.compaction_config.token_threshold == 60_000
+
+    # tech_lead has zero SubagentConfig overhead, uses argon + compaction_config
     lead_cfg = harness.build_sdk_agent_config(
         role=AgentRole.TECH_LEAD,
         tools=[],
         worktree_path=str(repo_root),
         interaction_callback=_dummy_interact,
     )
-    enabled = set(lead_cfg.capabilities.enabled_tools or ())
-    assert types.BuiltinTools.LIST_DIR in enabled
-    assert types.BuiltinTools.SEARCH_DIR in enabled
-    assert types.BuiltinTools.FIND_FILE in enabled
-    assert types.BuiltinTools.ASK_QUESTION in enabled
-    assert types.BuiltinTools.INVOKE_SUBAGENT in enabled
-    assert lead_cfg.capabilities.enable_subagents is True
-    assert lead_cfg.capabilities.agent_behavior == types.AgentBehavior.INTERACTIVE
-    subagent_names = {s.name for s in (lead_cfg.subagents or ())}
-    assert set(lead_cfg.capabilities.allowed_subagents or ()) == subagent_names
+    lead_enabled = set(lead_cfg.capabilities.enabled_tools or ())
+    assert types.BuiltinTools.INVOKE_SUBAGENT not in lead_enabled
+    assert lead_cfg.capabilities.enable_subagents is False
+    assert lead_cfg.compaction_config.token_threshold == 60_000
 
     # 2. LocalOpenAIAgentConfig with lightweight=True preserves role-specific enabled_tools
     local_ro_cfg = harness.build_sdk_agent_config(

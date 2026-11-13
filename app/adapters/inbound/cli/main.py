@@ -33,7 +33,7 @@ from app.application.ports import EventCallback, InteractionCallback
 from app.application.single_agent_service import SingleAgentRunResult
 from app.bootstrap.container import AppContainer, build_container
 from app.domain.cost import TokenUsage
-from app.domain.models import AgentRole, Task, TaskStatus, WorkUnit
+from app.domain.models import AgentRole, Task, TaskStatus, WorkUnit, utcnow_iso
 
 
 def _console() -> Console:
@@ -157,7 +157,7 @@ def _render_run_result(
     console.print(
         Panel(
             result.summary or "(no summary)",
-            title=f"Task {result.task.id} [{result.task.status.value}]",
+            title=f"Session {result.task.id} [{result.task.status.value}]",
             border_style=border,
         )
     )
@@ -168,6 +168,8 @@ async def _render_task_cost(
 ) -> None:
     policy = container.config.cost.policy
     daily_usd_spent = await container.storage.get_daily_usd_spent()
+    month_label = utcnow_iso()[:7]
+    monthly_usd_spent = await container.storage.get_monthly_usd_spent(month_label)
     if task is None:
         console.print(
             render_cost_panel(
@@ -178,6 +180,8 @@ async def _render_task_cost(
                 max_task_usd=policy.max_task_usd,
                 daily_usd_spent=daily_usd_spent,
                 max_daily_usd=policy.max_daily_usd,
+                monthly_usd_spent=monthly_usd_spent,
+                month_label=month_label,
             )
         )
         return
@@ -194,6 +198,8 @@ async def _render_task_cost(
             max_task_usd=policy.max_task_usd,
             daily_usd_spent=daily_usd_spent,
             max_daily_usd=policy.max_daily_usd,
+            monthly_usd_spent=monthly_usd_spent,
+            month_label=month_label,
         )
     )
 
@@ -289,7 +295,7 @@ def _make_cli_event_callback(console: Console) -> EventCallback:
         elif event_type == "TASK_WAITING_FOR_INPUT":
             console.print(f"  [cyan]? Waiting for input:[/cyan] {payload.get('content')}")
         elif event_type == "TASK_FAILED":
-            console.print("  [red]✗ Task failed[/red]")
+            console.print("  [red]✗ Session failed[/red]")
 
     return _on_event
 
@@ -336,7 +342,7 @@ async def _maybe_interactive_budget_top_up(
     if result.task.status != TaskStatus.PAUSED_BUDGET or not sys.stdin.isatty():
         return result
     if not click.confirm(
-        f"Task {result.task.id} paused on USD budget limit. Grant forward-looking top-up and resume?",
+        f"Session {result.task.id} paused on USD budget limit. Grant forward-looking top-up and resume?",
         default=True,
     ):
         return result
@@ -344,7 +350,7 @@ async def _maybe_interactive_budget_top_up(
     if extra_usd <= 0:
         return result
     await container.single_agent_service.grant_task_budget(result.task.id, extra_usd)
-    console.print(f"[cyan]Granted +${extra_usd:.2f} USD. Resuming task {result.task.id}...[/cyan]")
+    console.print(f"[cyan]Granted +${extra_usd:.2f} USD. Resuming session {result.task.id}...[/cyan]")
     return await container.single_agent_service.execute_prompt(
         result.task.prompt,
         task_id=result.task.id,
@@ -387,17 +393,31 @@ async def _load_and_render_session(
     selector: str,
     *,
     message_limit: int = 8,
+    max_work_units: int | None = 5,
 ) -> Task:
-    task, work_units, messages, total_usd = (
+    task, work_units, messages, _ = (
         await container.single_agent_service.get_session_overview(selector, message_limit=200)
     )
+    (
+        total_usd,
+        usage,
+        per_role,
+        per_wu_costs,
+        orch_cost,
+    ) = await container.single_agent_service.get_task_detailed_cost_breakdown(task.id)
     console.print(
         render_session_resume_panel(
             task,
             work_units,
             messages,
             total_usd=total_usd,
+            usage=usage,
+            max_task_usd=container.config.cost.policy.max_task_usd,
+            per_role_usd=per_role,
+            work_unit_costs=per_wu_costs,
+            orchestration_cost=orch_cost,
             max_messages=message_limit,
+            max_work_units=max_work_units,
         )
     )
     return task
@@ -537,12 +557,12 @@ def chat_cmd(
             if wu_id is None:
                 if active_task is None:
                     console.print(
-                        f"[yellow]No active session task. Pass an explicit WorkUnit ID: {cmd} <wu_id>[/yellow]"
+                        f"[yellow]No active session. Pass an explicit WorkUnit ID: {cmd} <wu_id>[/yellow]"
                     )
                     return
                 units = await container.storage.list_work_units(active_task.id)
                 if not units:
-                    console.print("[yellow]No WorkUnits in current session task yet.[/yellow]")
+                    console.print("[yellow]No WorkUnits in current session yet.[/yellow]")
                     return
                 if not from_start:
                     incomplete = [u for u in units if u.status != "COMPLETED"]
@@ -592,14 +612,14 @@ def chat_cmd(
                 console.print("[dim]Usage: /budget +<amount> | /budget daily [+]<amount>[/dim]")
                 return
 
-            scope = "task"
+            scope = "session"
             value_idx = 0
             first = args[0].lower()
             if first in {"daily", "--daily"}:
                 scope = "daily"
                 value_idx = 1
-            elif first in {"task", "--task"}:
-                scope = "task"
+            elif first in {"session", "--session", "task", "--task"}:
+                scope = "session"
                 value_idx = 1
 
             if value_idx >= len(args):
@@ -644,13 +664,13 @@ def chat_cmd(
                     f"(spent=${daily_spent:.4f}, ${daily_left:.4f} left).[/green]"
                 )
                 if was_paused and active_task is not None:
-                    console.print("[cyan]Resuming paused task...[/cyan]")
+                    console.print("[cyan]Resuming paused session...[/cyan]")
                     await _execute(active_task.prompt)
                 return
 
             if active_task is None:
                 console.print(
-                    "[yellow]No active task to grant task budget to (use `/budget daily <amount>` for daily limit).[/yellow]"
+                    "[yellow]No active session to grant session budget to (use `/budget daily <amount>` for daily limit).[/yellow]"
                 )
                 return
             was_paused = active_task.status == TaskStatus.PAUSED_BUDGET
@@ -658,11 +678,11 @@ def chat_cmd(
                 active_task.id, amount
             )
             console.print(
-                f"[green]Granted +${amount:.2f} USD to task {active_task.id} "
+                f"[green]Granted +${amount:.2f} USD to session {active_task.id} "
                 f"(extra granted total: ${active_task.extra_usd_granted:.2f}).[/green]"
             )
             if was_paused:
-                console.print("[cyan]Resuming paused task...[/cyan]")
+                console.print("[cyan]Resuming paused session...[/cyan]")
                 await _execute(active_task.prompt)
 
         if prompt:
@@ -752,9 +772,9 @@ def chat_cmd(
                         console.print("[red]Usage: /fast-path [on|off][/red]")
                         continue
                     state = (
-                        "ON (direct pipeline execution, skips Tech Lead)"
+                        "ON (direct pipeline execution, skips Coordinator)"
                         if fast_path_mode
-                        else "OFF (Tech Lead orchestrates each turn)"
+                        else "OFF (Coordinator orchestrates each turn)"
                     )
                     console.print(f"[cyan]Fast-path mode: {state}[/cyan]")
                     continue
@@ -766,25 +786,104 @@ def chat_cmd(
                 if cmd == "/new":
                     active_task = None
                     last_result = None
-                    console.print("[cyan]Started new session (next message creates a new Task).[/cyan]")
+                    console.print("[cyan]Started new session (next message creates a new session).[/cyan]")
                     continue
 
                 if cmd == "/sessions":
-                    limit = 20
-                    if args:
-                        try:
-                            limit = max(1, int(args[0]))
-                        except ValueError:
-                            console.print("[red]Usage: /sessions [limit][/red]")
-                            continue
-                    runner.run(
-                        _print_sessions_list(
-                            console,
-                            container,
-                            limit=limit,
-                            active_task_id=active_task.id if active_task else None,
+                    sub = args[0].lower() if args else ""
+                    if not args or sub == "list" or (args[0].isdigit() and len(args) == 1):
+                        limit = 20
+                        limit_arg = args[1] if sub == "list" and len(args) > 1 else (args[0] if args and sub != "list" else None)
+                        if limit_arg is not None:
+                            try:
+                                limit = max(1, int(limit_arg))
+                            except ValueError:
+                                console.print("[red]Usage: /sessions [limit][/red]")
+                                continue
+                        runner.run(
+                            _print_sessions_list(
+                                console,
+                                container,
+                                limit=limit,
+                                active_task_id=active_task.id if active_task else None,
+                            )
                         )
-                    )
+                        continue
+
+                    if sub == "delete":
+                        rest = [a for a in args[1:] if a != "--keep-worktree"]
+                        keep_wt = "--keep-worktree" in args[1:]
+                        if not rest:
+                            console.print("[red]Usage: /sessions delete <SessionID> [--keep-worktree][/red]")
+                            continue
+                        try:
+                            deleted = runner.run(
+                                container.single_agent_service.delete_session(
+                                    rest[0], cleanup_worktree=not keep_wt
+                                )
+                            )
+                            if active_task is not None and active_task.id == deleted.id:
+                                active_task = None
+                                last_result = None
+                            console.print(
+                                f"[green]Deleted session {deleted.id} ({deleted.title}).[/green]"
+                            )
+                        except KeyError as exc:
+                            console.print(f"[red]{exc}[/red]")
+                        continue
+
+                    if sub == "resume":
+                        if len(args) < 2:
+                            console.print("[red]Usage: /sessions resume <SessionID>[/red]")
+                            continue
+                        try:
+                            active_task = runner.run(
+                                _load_and_render_session(console, container, args[1])
+                            )
+                            last_result = None
+                        except KeyError as exc:
+                            console.print(f"[red]{exc}[/red]")
+                        continue
+
+                    if sub == "rename":
+                        if len(args) < 3:
+                            console.print("[red]Usage: /sessions rename <SessionID> <new title>[/red]")
+                            continue
+                        try:
+                            renamed = runner.run(
+                                container.single_agent_service.rename_session(
+                                    args[1], " ".join(args[2:])
+                                )
+                            )
+                            if active_task is not None and active_task.id == renamed.id:
+                                active_task = renamed
+                            console.print(
+                                f"[green]Renamed session {renamed.id} to: {renamed.title}[/green]"
+                            )
+                        except (KeyError, ValueError) as exc:
+                            console.print(f"[red]{exc}[/red]")
+                        continue
+
+                    if sub == "show":
+                        if len(args) < 2:
+                            console.print("[red]Usage: /sessions show <SessionID>[/red]")
+                            continue
+                        selector = args[1]
+                    else:
+                        selector = args[0]
+
+                    try:
+                        runner.run(
+                            _load_and_render_session(
+                                console,
+                                container,
+                                selector,
+                                message_limit=20,
+                                max_work_units=None,
+                            )
+                        )
+                    except KeyError as exc:
+                        console.print(f"[red]{exc}[/red]")
                     continue
 
                 if cmd == "/resume":
@@ -829,16 +928,27 @@ def chat_cmd(
                     continue
 
                 if cmd == "/status":
-                    work_units: list[WorkUnit] = []
-                    if active_task is not None:
-                        active_task = (
+                    target_task = active_task
+                    if args:
+                        try:
+                            target_task = runner.run(
+                                container.single_agent_service.resolve_session(args[0])
+                            )
+                        except KeyError as exc:
+                            console.print(f"[red]{exc}[/red]")
+                            continue
+                    elif active_task is not None:
+                        target_task = (
                             runner.run(container.storage.get_task(active_task.id))
                             or active_task
                         )
+                        active_task = target_task
+                    work_units: list[WorkUnit] = []
+                    if target_task is not None:
                         work_units = runner.run(
-                            container.storage.list_work_units(active_task.id)
+                            container.storage.list_work_units(target_task.id)
                         )
-                    console.print(render_status_panel(active_task, work_units, container.config))
+                    console.print(render_status_panel(target_task, work_units, container.config))
                     continue
 
                 if cmd == "/pipeline":
@@ -859,7 +969,16 @@ def chat_cmd(
                     continue
 
                 if cmd == "/cost":
-                    runner.run(_render_task_cost(console, container, active_task))
+                    target_task = active_task
+                    if args:
+                        try:
+                            target_task = runner.run(
+                                container.single_agent_service.resolve_session(args[0])
+                            )
+                        except KeyError as exc:
+                            console.print(f"[red]{exc}[/red]")
+                            continue
+                    runner.run(_render_task_cost(console, container, target_task))
                     continue
 
                 if cmd == "/budget":
@@ -925,9 +1044,9 @@ def chat_cmd(
     "--complexity",
     type=click.Choice(["simple", "complex"]),
     default=None,
-    help="Task complexity override.",
+    help="Session complexity override.",
 )
-@click.option("--resume", "resume_task_id", default=None, help="Resume an existing Task ID.")
+@click.option("--resume", "resume_task_id", default=None, help="Resume an existing Session ID.")
 @click.option("--work-unit", "work_unit_id", default=None, help="Resume or retry a specific WorkUnit ID.")
 @click.option(
     "--from-start",
@@ -972,7 +1091,7 @@ def exec_cmd(
     model_override: str | None,
     fast_path: bool,
 ) -> None:
-    """Execute a single prompt non-interactively (or resume a task/WorkUnit) and print the result."""
+    """Execute a single prompt non-interactively (or resume a session/WorkUnit) and print the result."""
     if not prompt.strip() and not resume_task_id and not work_unit_id:
         raise click.UsageError(
             "Missing argument 'PROMPT' (required unless '--resume' or '--work-unit' is given)."
@@ -993,7 +1112,7 @@ def exec_cmd(
                     raise click.BadParameter("must be positive", param_hint="--budget-top-up")
                 await container.single_agent_service.grant_task_budget(wu.task_id, budget_top_up)
                 console.print(
-                    f"[green]Granted +${budget_top_up:.2f} USD to task {wu.task_id}.[/green]"
+                    f"[green]Granted +${budget_top_up:.2f} USD to session {wu.task_id}.[/green]"
                 )
             result = await container.single_agent_service.resume_work_unit(
                 work_unit_id,
@@ -1027,7 +1146,7 @@ def exec_cmd(
                     resolved_task_id, budget_top_up
                 )
                 console.print(
-                    f"[green]Granted +${budget_top_up:.2f} USD to task {resolved_task_id}.[/green]"
+                    f"[green]Granted +${budget_top_up:.2f} USD to session {resolved_task_id}.[/green]"
                 )
 
         result = await container.single_agent_service.execute_prompt(
@@ -1248,7 +1367,7 @@ def sessions_group(ctx: click.Context) -> None:
     "status_filter",
     type=click.Choice([s.value for s in TaskStatus], case_sensitive=False),
     default=None,
-    help="Filter sessions by task status.",
+    help="Filter sessions by status.",
 )
 @click.option("--limit", default=20, show_default=True, help="Maximum sessions to list.")
 @click.pass_context
@@ -1268,17 +1387,21 @@ def sessions_list_cmd(
 
 
 @sessions_group.command("show")
-@click.argument("selector", default="latest")
+@click.argument("session_id", default="latest")
 @click.option("--limit", default=20, show_default=True, help="Maximum recent transcript messages to display.")
 @click.pass_context
-def sessions_show_cmd(ctx: click.Context, selector: str, limit: int) -> None:
+def sessions_show_cmd(ctx: click.Context, session_id: str, limit: int) -> None:
     """Inspect a stored session, its WorkUnits, cost, and recent transcript."""
 
     async def _run() -> None:
         container = await _ensure_container(ctx)
         try:
             await _load_and_render_session(
-                _console(), container, selector, message_limit=max(1, limit)
+                _console(),
+                container,
+                session_id,
+                message_limit=max(1, limit),
+                max_work_units=None,
             )
         except KeyError as exc:
             raise click.ClickException(str(exc)) from exc
@@ -1287,7 +1410,7 @@ def sessions_show_cmd(ctx: click.Context, selector: str, limit: int) -> None:
 
 
 @sessions_group.command("resume")
-@click.argument("selector", default="latest")
+@click.argument("session_id", default="latest")
 @click.option(
     "--worktree/--no-worktree",
     default=None,
@@ -1304,7 +1427,7 @@ def sessions_show_cmd(ctx: click.Context, selector: str, limit: int) -> None:
 @click.pass_context
 def sessions_resume_cmd(
     ctx: click.Context,
-    selector: str,
+    session_id: str,
     worktree: bool | None,
     model_override: str | None,
     fast_path: bool,
@@ -1312,7 +1435,7 @@ def sessions_resume_cmd(
     """Open interactive `chat` resumed onto a stored session."""
     ctx.invoke(
         chat_cmd,
-        resume_task_id=selector,
+        resume_task_id=session_id,
         continue_latest=False,
         worktree=worktree,
         model_override=model_override,
@@ -1321,11 +1444,11 @@ def sessions_resume_cmd(
 
 
 @sessions_group.command("rename")
-@click.argument("selector")
+@click.argument("session_id")
 @click.argument("title", nargs=-1, required=True)
 @click.pass_context
 def sessions_rename_cmd(
-    ctx: click.Context, selector: str, title: tuple[str, ...]
+    ctx: click.Context, session_id: str, title: tuple[str, ...]
 ) -> None:
     """Rename a stored session's title."""
 
@@ -1333,7 +1456,7 @@ def sessions_rename_cmd(
         container = await _ensure_container(ctx)
         try:
             task = await container.single_agent_service.rename_session(
-                selector, " ".join(title)
+                session_id, " ".join(title)
             )
         except (KeyError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
@@ -1345,7 +1468,7 @@ def sessions_rename_cmd(
 
 
 @sessions_group.command("delete")
-@click.argument("selector")
+@click.argument("session_id")
 @click.option(
     "--keep-worktree",
     is_flag=True,
@@ -1354,7 +1477,7 @@ def sessions_rename_cmd(
 )
 @click.pass_context
 def sessions_delete_cmd(
-    ctx: click.Context, selector: str, keep_worktree: bool
+    ctx: click.Context, session_id: str, keep_worktree: bool
 ) -> None:
     """Delete a stored session and its persisted SQLite/SDK state."""
 
@@ -1362,7 +1485,7 @@ def sessions_delete_cmd(
         container = await _ensure_container(ctx)
         try:
             deleted = await container.single_agent_service.delete_session(
-                selector, cleanup_worktree=not keep_worktree
+                session_id, cleanup_worktree=not keep_worktree
             )
         except KeyError as exc:
             raise click.ClickException(str(exc)) from exc

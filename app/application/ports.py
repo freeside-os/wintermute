@@ -62,6 +62,7 @@ class AgentHarnessPort(Protocol):
         stop_gate: StopGateCallback | None = None,
         budget_scope: BudgetScope = BudgetScope.LIFETIME,
         model_override: str | None = None,
+        thinking_level_override: str | None = None,
         conversation_id: str | None = None,
         pre_write_callback: PreWriteCallback | None = None,
         interaction_callback: InteractionCallback | None = None,
@@ -115,9 +116,15 @@ class StoragePort(Protocol):
 
     async def get_daily_usd_spent(self, day_prefix: str | None = None) -> float: ...
 
+    async def get_monthly_usd_spent(self, month_prefix: str | None = None) -> float: ...
+
     async def get_task_token_usage(self, task_id: str) -> TokenUsage: ...
 
     async def get_daily_token_usage(self, day_prefix: str | None = None) -> TokenUsage: ...
+
+    async def get_monthly_token_usage(self, month_prefix: str | None = None) -> TokenUsage: ...
+
+    async def list_monthly_spend(self, limit: int = 12) -> list[tuple[str, float, TokenUsage]]: ...
 
     async def get_cached_pricing(
         self, model_id: str, *, max_age_hours: int = 24
@@ -194,6 +201,7 @@ class JustToolProviderPort(Protocol):
         domain: str | None = None,
         task_id: str | None = None,
         dispatch_callback: Callable[..., Awaitable[str]] | None = None,
+        escalate_callback: Callable[..., Awaitable[str]] | None = None,
     ) -> list[Callable[..., Any]]: ...
 
     async def run_validator(

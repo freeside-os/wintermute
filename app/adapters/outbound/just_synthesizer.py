@@ -17,6 +17,7 @@ from typing import Any
 from app.application.ports import JustToolProviderPort, WorktreePort
 from app.bootstrap.config import AgentRoleConfig, WintermuteConfig
 from app.domain.models import AgentRole, JustParamSpec, JustRecipeSpec
+from app.domain.text_compaction import compact_command_output
 
 DumpProvider = Callable[[Path], dict[str, Any]]
 CommandRunner = Callable[
@@ -330,7 +331,8 @@ class JustToolSynthesizer(JustToolProviderPort):
                 spec, args=ordered_args, task_id=task_id
             )
             prefix = "[OK]" if ok else "[FAILED]"
-            return f"{prefix} just {spec.name}\n{output}".strip()
+            compacted = compact_command_output(output, max_chars=12_000)
+            return f"{prefix} just {spec.name}\n{compacted}".strip()
 
         sig_params = [
             inspect.Parameter(
@@ -430,6 +432,7 @@ class JustToolSynthesizer(JustToolProviderPort):
         domain: str | None = None,
         task_id: str | None = None,
         dispatch_callback: Callable[..., Awaitable[str]] | None = None,
+        escalate_callback: Callable[..., Awaitable[str]] | None = None,
     ) -> list[Callable[..., Any]]:
         specs = self.discover_recipes()
         role_cfg = self.config.agents.get(role.value)
@@ -446,10 +449,15 @@ class JustToolSynthesizer(JustToolProviderPort):
                 "dispatch_work_unit",
                 lambda: self._build_dispatch_tool(dispatch_callback=dispatch_callback),
             ),
+            (
+                "escalate_to_tech_lead",
+                lambda: self._build_escalate_tool(escalate_callback=escalate_callback),
+            ),
         )
         for tool_name, builder in orchestration_tools:
             if role_cfg is not None and role_cfg.allowed_tools and role_cfg.is_tool_allowed(tool_name):
                 tools.append(builder())
+        tools.sort(key=lambda fn: getattr(fn, "__name__", str(fn)))
         return tools
 
     def _build_reload_tool(self) -> Callable[..., str]:
@@ -512,6 +520,28 @@ class JustToolSynthesizer(JustToolProviderPort):
             )
 
         return dispatch_work_unit
+
+    def _build_escalate_tool(
+        self, escalate_callback: Callable[..., Awaitable[str]] | None = None
+    ) -> Callable[..., Awaitable[str]]:
+        async def escalate_to_tech_lead(
+            brief: str,
+            domain: str = "",
+            target: str = "",
+        ) -> str:
+            """Escalate complex planning, decomposition, or blocked asks to Tech Lead (`argon`)."""
+            if escalate_callback is not None:
+                return await escalate_callback(
+                    brief=brief,
+                    domain=domain,
+                    target=target,
+                )
+            return (
+                f"Escalated to tech_lead: domain={domain or 'auto'}, "
+                f"target={target or 'none'}."
+            )
+
+        return escalate_to_tech_lead
 
     async def run_validator(
         self,

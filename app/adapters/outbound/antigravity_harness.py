@@ -283,6 +283,7 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
         stop_gate: StopGateCallback | None = None,
         budget_scope: BudgetScope = BudgetScope.LIFETIME,
         model_override: str | None = None,
+        thinking_level_override: str | None = None,
         conversation_id: str | None = None,
         pre_write_callback: PreWriteCallback | None = None,
         interaction_callback: InteractionCallback | None = None,
@@ -291,25 +292,34 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
         role_cfg: AgentRoleConfig = self.config.agents[role.value]
         effective_model_alias = model_override or role_cfg.model
         model_profile: ModelProfile = self.config.models[effective_model_alias]
+        effective_thinking_level = (
+            thinking_level_override
+            or role_cfg.thinking_level
+        )
         if role_cfg.skills:
-            skills_paths = [
+            skills_paths = sorted(
                 str(skill.path.parent)
                 for skill_name in role_cfg.skills
                 if (skill := self.config.resolve_skill(skill_name)) is not None
                 and skill.path is not None
                 and skill.path.parent.exists()
-            ]
+            )
         else:
-            skills_paths = [str(p) for p in self.config.workspace.skills_dirs if p.exists()]
+            skills_paths = sorted(
+                str(p) for p in self.config.workspace.skills_dirs if p.exists()
+            )
         system_instructions = self.config.resolve_agent_instructions(role.value)
         effective_read_only = read_only or role_cfg.read_only
-        filtered_tools = [
-            t
-            for t in tools
-            if role_cfg.is_tool_allowed(
-                getattr(t, "__name__", str(t)), include_macro_match=True
-            )
-        ]
+        filtered_tools = sorted(
+            (
+                t
+                for t in tools
+                if role_cfg.is_tool_allowed(
+                    getattr(t, "__name__", str(t)), include_macro_match=True
+                )
+            ),
+            key=lambda t: getattr(t, "__name__", str(t)),
+        )
 
         try:
             from google.antigravity import (  # type: ignore[import-not-found]
@@ -324,7 +334,8 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
             return {
                 "provider": model_profile.provider,
                 "model": model_profile.model,
-                "thinking_level": model_profile.thinking_level,
+                "thinking_level": effective_thinking_level,
+                "compaction_token_threshold": role_cfg.compaction_token_threshold,
                 "role": role.value,
                 "system_instructions": system_instructions,
                 "worktree_path": worktree_path,
@@ -356,7 +367,7 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
             and role_cfg.is_tool_allowed("invoke_subagent")
         )
         if can_use_subagents:
-            for sub_name in role_cfg.allowed_subagents:
+            for sub_name in sorted(role_cfg.allowed_subagents):
                 sub_role = self.config.agents.get(sub_name)
                 if sub_role is None:
                     continue
@@ -371,6 +382,9 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
                     )
                 )
 
+        researcher_gated_run_cmd = (
+            role == AgentRole.RESEARCHER and role_cfg.is_tool_allowed("run_command")
+        )
         enabled_builtin_tools: list[Any] = []
         write_exec_builtins = {
             types.BuiltinTools.EDIT_FILE,
@@ -385,6 +399,8 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
             elif bt == types.BuiltinTools.INVOKE_SUBAGENT:
                 if subagent_configs:
                     enabled_builtin_tools.append(bt)
+            elif bt == types.BuiltinTools.RUN_COMMAND and researcher_gated_run_cmd:
+                enabled_builtin_tools.append(bt)
             elif bt in write_exec_builtins:
                 if not effective_read_only and role_cfg.is_tool_allowed(bt.value):
                     enabled_builtin_tools.append(bt)
@@ -393,17 +409,24 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
 
         # SDK PolicyMatcher matches exact tool names or "*" (no fnmatch globs).
         # Build deny-first exact allowlist followed by deny_all().
-        policies: list[Any] = [
-            policy.deny(
-                "run_command",
-                when=should_block_raw_command,
-                reason="Raw cargo/pytest/straylight/fstools shell commands are blocked; use synthesized just_* tools.",
-                name="block_raw_build_commands",
+        policies: list[Any] = []
+        if not researcher_gated_run_cmd:
+            policies.append(
+                policy.deny(
+                    "run_command",
+                    when=should_block_raw_command,
+                    reason="Raw cargo/pytest/straylight/fstools shell commands are blocked; use synthesized just_* tools.",
+                    name="block_raw_build_commands",
+                )
             )
-        ]
         denied_names: set[str] = set()
         if effective_read_only:
-            for ro_denied in ("edit_file", "create_file", "run_command"):
+            ro_tools = (
+                ("edit_file", "create_file")
+                if researcher_gated_run_cmd
+                else ("edit_file", "create_file", "run_command")
+            )
+            for ro_denied in ro_tools:
                 policies.append(
                     policy.deny(
                         ro_denied,
@@ -427,6 +450,38 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
                 policies.append(policy.deny(tname, reason=f"Denied for role '{role.value}'."))
                 denied_names.add(tname)
 
+        async def _approve_researcher_run_command(
+            call: types.ToolCall, _reason: str | None = None
+        ) -> bool:
+            if interaction_callback is None:
+                return False
+            cmd_val = _first_present(call.args or {}, _CMD_ARG_KEYS)
+            cmd_preview = str(cmd_val) if cmd_val is not None else str(call.args or "")
+            answers = await interaction_callback(
+                [
+                    {
+                        "question": (
+                            f"Researcher wants to run command:\n  {cmd_preview}\n"
+                            "Approve execution?"
+                        ),
+                        "options": [
+                            {"id": "yes", "text": "Yes"},
+                            {"id": "no", "text": "No"},
+                        ],
+                    }
+                ]
+            )
+            if not answers:
+                return False
+            return str(answers[0]).strip().lower() in {
+                "y",
+                "yes",
+                "approve",
+                "approved",
+                "true",
+                "1",
+            }
+
         allowed_names: set[str] = set()
         for t in filtered_tools:
             tname = getattr(t, "__name__", str(t))
@@ -436,7 +491,17 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
         for bt in enabled_builtin_tools:
             bname = bt.value
             if bname not in denied_names and bname not in allowed_names:
-                policies.append(policy.allow(bname))
+                if researcher_gated_run_cmd and bt == types.BuiltinTools.RUN_COMMAND:
+                    policies.append(
+                        policy.ask_user(
+                            bname,
+                            handler=_approve_researcher_run_command,
+                            name="researcher_approve_run_command",
+                            reason="Researcher command execution always requires user approval.",
+                        )
+                    )
+                else:
+                    policies.append(policy.allow(bname))
                 allowed_names.add(bname)
         policies.append(
             policy.deny(
@@ -507,6 +572,8 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
 
             agent_hooks.append(_on_interaction)
 
+        enabled_builtin_tools.sort(key=lambda bt: bt.value)
+
         if model_profile.lightweight:
             agent_behavior = types.AgentBehavior.MINIMAL
         elif (
@@ -538,6 +605,14 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
         }
         if system_instructions is not None:
             common_kwargs["system_instructions"] = system_instructions
+        if (
+            role_cfg.compaction_token_threshold
+            and role_cfg.compaction_token_threshold > 0
+            and hasattr(types, "CompactionConfig")
+        ):
+            common_kwargs["compaction_config"] = types.CompactionConfig(
+                token_threshold=role_cfg.compaction_token_threshold
+            )
         if (
             conversation_id
             and len(conversation_id) >= 32
@@ -582,13 +657,13 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
             local_kwargs["api_key"] = os.environ[key_env]
         cfg = LocalAgentConfig(**local_kwargs)
         if (
-            model_profile.thinking_level
+            effective_thinking_level
             and hasattr(types, "ThinkingLevel")
             and hasattr(types, "GeminiModelOptions")
         ):
             try:
                 thinking_enum = types.ThinkingLevel(
-                    model_profile.thinking_level.strip().lower()
+                    effective_thinking_level.strip().lower()
                 )
             except ValueError:
                 thinking_enum = None
@@ -621,6 +696,7 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
         stop_gate: StopGateCallback | None = None,
         budget_scope: BudgetScope = BudgetScope.LIFETIME,
         model_override: str | None = None,
+        thinking_level_override: str | None = None,
         conversation_id: str | None = None,
         pre_write_callback: PreWriteCallback | None = None,
         interaction_callback: InteractionCallback | None = None,
@@ -643,7 +719,8 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
             stop_gate=stop_gate,
             budget_scope=budget_scope,
             model_override=model_override,
-            conversation_id=conversation_id or task.conversation_id,
+            thinking_level_override=thinking_level_override,
+            conversation_id=conversation_id,
             pre_write_callback=pre_write_callback,
             interaction_callback=interaction_callback,
             event_callback=event_callback,
@@ -662,12 +739,13 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
                     "stop_gate": stop_gate,
                     "budget_scope": budget_scope,
                     "model_override": model_override,
-                    "conversation_id": conversation_id or task.conversation_id,
+                    "thinking_level_override": thinking_level_override,
+                    "conversation_id": conversation_id,
                     "sdk_config": sdk_cfg,
                 }
             )
             if not result.conversation_id:
-                result.conversation_id = conversation_id or task.conversation_id
+                result.conversation_id = conversation_id
             return result
 
         for target in getattr(sdk_cfg, "models", None) or ():
@@ -703,7 +781,6 @@ class AntigravityHarnessAdapter(AgentHarnessPort):
             resolved_conv_id = (
                 getattr(agent, "conversation_id", None)
                 or conversation_id
-                or task.conversation_id
             )
             return StageTurnResult(
                 response_text=text,

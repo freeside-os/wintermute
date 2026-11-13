@@ -109,21 +109,31 @@ class KnowledgeService:
         domain: str,
         target: str | None = None,
         query: str,
+        limit: int | None = None,
     ) -> str:
+        eff_limit = (
+            limit if limit is not None else self.config.memory.auto_prime_limit
+        )
+        if eff_limit <= 0:
+            return ""
         entries = await self.search(
             query,
             domain=domain,
             target=target,
-            limit=self.config.memory.auto_prime_limit,
+            limit=eff_limit,
         )
         if not entries:
             return ""
+
+        def _clip(val: str, max_len: int = 300) -> str:
+            cleaned = " ".join(val.split())
+            return cleaned if len(cleaned) <= max_len else f"{cleaned[: max_len - 1].rstrip()}…"
 
         lines = ["### Relevant Prior Lessons (Knowledge Base)"]
         for entry in entries:
             lines.append(
                 f"- [{entry.domain}/{entry.target}] ({entry.outcome}) "
-                f"Issue: {entry.issue} | Resolution: {entry.resolution}"
+                f"Issue: {_clip(entry.issue)} | Resolution: {_clip(entry.resolution)}"
             )
         return "\n".join(lines)
 

@@ -30,7 +30,7 @@ class CostController:
             return BudgetVerdict(
                 allowed=False,
                 reason=(
-                    f"Task budget exceeded: ${task_spent:.4f} spent >= "
+                    f"Session budget exceeded: ${task_spent:.4f} spent >= "
                     f"${task_limit:.4f} limit."
                 ),
                 task_usd_spent=task_spent,
@@ -116,7 +116,7 @@ class CostController:
             raise ValueError("additional_usd must be positive")
         task = await self.storage.get_task(task_id)
         if task is None:
-            raise KeyError(f"Task '{task_id}' not found")
+            raise KeyError(f"Session '{task_id}' not found")
 
         task.extra_usd_granted += additional_usd
         if task.status == TaskStatus.PAUSED_BUDGET:

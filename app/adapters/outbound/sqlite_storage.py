@@ -229,6 +229,17 @@ class SQLiteStorageAdapter(StoragePort):
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS monthly_spend (
+                    month TEXT PRIMARY KEY,
+                    total_usd REAL NOT NULL DEFAULT 0.0,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    cached_tokens INTEGER NOT NULL DEFAULT 0,
+                    candidate_tokens INTEGER NOT NULL DEFAULT 0,
+                    thoughts_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                     entry_id UNINDEXED,
                     domain,
@@ -253,6 +264,27 @@ class SQLiteStorageAdapter(StoragePort):
                 await conn.execute(
                     "ALTER TABLE work_units ADD COLUMN skills_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO monthly_spend (
+                    month, total_usd, prompt_tokens, cached_tokens,
+                    candidate_tokens, thoughts_tokens, total_tokens, updated_at
+                )
+                SELECT
+                    substr(timestamp, 1, 7) AS month,
+                    COALESCE(SUM(usd_cost), 0.0),
+                    COALESCE(SUM(prompt_tokens), 0),
+                    COALESCE(SUM(cached_tokens), 0),
+                    COALESCE(SUM(candidate_tokens), 0),
+                    COALESCE(SUM(thoughts_tokens), 0),
+                    COALESCE(SUM(total_tokens), 0),
+                    ?
+                FROM cost_ledger
+                WHERE length(timestamp) >= 7
+                GROUP BY substr(timestamp, 1, 7)
+                """,
+                (utcnow_iso(),),
+            )
             await conn.commit()
 
     def _row_to_task(self, row: aiosqlite.Row) -> Task:
@@ -680,6 +712,33 @@ class SQLiteStorageAdapter(StoragePort):
                     entry.timestamp,
                 ),
             )
+            month = entry.timestamp[:7] if len(entry.timestamp) >= 7 else utcnow_iso()[:7]
+            await conn.execute(
+                """
+                INSERT INTO monthly_spend (
+                    month, total_usd, prompt_tokens, cached_tokens,
+                    candidate_tokens, thoughts_tokens, total_tokens, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(month) DO UPDATE SET
+                    total_usd = monthly_spend.total_usd + excluded.total_usd,
+                    prompt_tokens = monthly_spend.prompt_tokens + excluded.prompt_tokens,
+                    cached_tokens = monthly_spend.cached_tokens + excluded.cached_tokens,
+                    candidate_tokens = monthly_spend.candidate_tokens + excluded.candidate_tokens,
+                    thoughts_tokens = monthly_spend.thoughts_tokens + excluded.thoughts_tokens,
+                    total_tokens = monthly_spend.total_tokens + excluded.total_tokens,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    month,
+                    entry.usd_cost,
+                    entry.usage.prompt_tokens,
+                    entry.usage.cached_tokens,
+                    entry.usage.candidate_tokens,
+                    entry.usage.thoughts_tokens,
+                    entry.usage.total_tokens,
+                    utcnow_iso(),
+                ),
+            )
             await conn.commit()
 
     async def get_task_usd_spent(self, task_id: str) -> float:
@@ -697,6 +756,16 @@ class SQLiteStorageAdapter(StoragePort):
             cursor = await conn.execute(
                 "SELECT COALESCE(SUM(usd_cost), 0.0) AS total FROM cost_ledger WHERE timestamp LIKE ?",
                 (f"{prefix}%",),
+            )
+            row = await cursor.fetchone()
+            return float(row["total"]) if row else 0.0
+
+    async def get_monthly_usd_spent(self, month_prefix: str | None = None) -> float:
+        prefix = (month_prefix or utcnow_iso())[:7]
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "SELECT COALESCE(total_usd, 0.0) AS total FROM monthly_spend WHERE month = ?",
+                (prefix,),
             )
             row = await cursor.fetchone()
             return float(row["total"]) if row else 0.0
@@ -751,6 +820,66 @@ class SQLiteStorageAdapter(StoragePort):
                 thoughts_tokens=int(row["tt"]),
                 total_tokens=int(row["tot"]),
             )
+
+    async def get_monthly_token_usage(self, month_prefix: str | None = None) -> TokenUsage:
+        prefix = (month_prefix or utcnow_iso())[:7]
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT
+                    prompt_tokens AS pt,
+                    cached_tokens AS ct,
+                    candidate_tokens AS cdt,
+                    thoughts_tokens AS tt,
+                    total_tokens AS tot
+                FROM monthly_spend WHERE month = ?
+                """,
+                (prefix,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return TokenUsage()
+            return TokenUsage(
+                prompt_tokens=int(row["pt"]),
+                cached_tokens=int(row["ct"]),
+                candidate_tokens=int(row["cdt"]),
+                thoughts_tokens=int(row["tt"]),
+                total_tokens=int(row["tot"]),
+            )
+
+    async def list_monthly_spend(self, limit: int = 12) -> list[tuple[str, float, TokenUsage]]:
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT
+                    month,
+                    total_usd,
+                    prompt_tokens,
+                    cached_tokens,
+                    candidate_tokens,
+                    thoughts_tokens,
+                    total_tokens
+                FROM monthly_spend
+                ORDER BY month DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [
+                (
+                    str(row["month"]),
+                    float(row["total_usd"]),
+                    TokenUsage(
+                        prompt_tokens=int(row["prompt_tokens"]),
+                        cached_tokens=int(row["cached_tokens"]),
+                        candidate_tokens=int(row["candidate_tokens"]),
+                        thoughts_tokens=int(row["thoughts_tokens"]),
+                        total_tokens=int(row["total_tokens"]),
+                    ),
+                )
+                for row in rows
+            ]
 
     async def get_cached_pricing(
         self, model_id: str, *, max_age_hours: int = 24

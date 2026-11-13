@@ -137,6 +137,21 @@ def _make_test_container(
                 usage=usage,
                 files_modified=False,
             )
+        # COORDINATOR escalates complex/planning turns to TECH_LEAD via escalate_to_tech_lead.
+        if role == AgentRole.COORDINATOR:
+            for tool in ctx["tools"]:
+                if getattr(tool, "__name__", "") == "escalate_to_tech_lead":
+                    summary = await tool(brief=ctx["prompt"])
+                    return StageTurnResult(
+                        response_text=summary,
+                        usage=usage,
+                        files_modified=False,
+                    )
+            return StageTurnResult(
+                response_text="Coordinator turn completed.",
+                usage=usage,
+                files_modified=False,
+            )
         # TECH_LEAD during decomposition can invoke dispatch_work_unit if available.
         if role == AgentRole.TECH_LEAD:
             for tool in ctx["tools"]:
@@ -212,7 +227,8 @@ async def test_single_agent_service_swarm_path_multi_domain(tmp_path: Path) -> N
     assert "fstools" in result.route.sub_domains
     assert result.completed is True
     assert len(result.work_units) == 2
-    assert turns[0]["role"] == AgentRole.TECH_LEAD
+    assert turns[0]["role"] == AgentRole.COORDINATOR
+    assert turns[1]["role"] == AgentRole.TECH_LEAD
 
 
 @pytest.mark.asyncio
@@ -553,17 +569,17 @@ def test_tech_lead_default_welcome_banner_and_fast_path_opt_in(
     )
     assert res_chat.exit_code == 0, res_chat.output
     assert "Wintermute Chat" in res_chat.output
-    assert "All messages share one Task" in res_chat.output
+    assert "All messages share one Session" in res_chat.output
     assert "/fast-path" in res_chat.output
     assert "/new" in res_chat.output
-    assert "Route: tech_lead" in res_chat.output
+    assert "Route: coordinator" in res_chat.output
     assert "Started new session" in res_chat.output
     assert "Fast-path mode: ON" in res_chat.output
     assert "Route: fast_path" in res_chat.output
-    assert turns[0]["role"] == AgentRole.TECH_LEAD
+    assert turns[0]["role"] == AgentRole.COORDINATOR
 
     turns.clear()
-    # 3. `exec --fast-path` opts into fast-path (skips Tech Lead upfront)
+    # 3. `exec --fast-path` opts into fast-path (skips Coordinator/Tech Lead upfront)
     res_exec = runner.invoke(
         cli,
         ["exec", "--fast-path", "--domain", "docs", "--no-worktree", "Tidy docs index"],
@@ -571,7 +587,9 @@ def test_tech_lead_default_welcome_banner_and_fast_path_opt_in(
     )
     assert res_exec.exit_code == 0, res_exec.output
     assert "Route: fast_path" in res_exec.output
-    assert all(t["role"] != AgentRole.TECH_LEAD for t in turns)
+    assert all(
+        t["role"] not in {AgentRole.COORDINATOR, AgentRole.TECH_LEAD} for t in turns
+    )
 
 
 @pytest.mark.asyncio
@@ -584,7 +602,7 @@ async def test_session_as_task_conversational_tech_lead_and_fast_path_delegation
 
     async def _turn_runner(ctx: dict[str, Any]) -> StageTurnResult:
         role: AgentRole = ctx["role"]
-        if role == AgentRole.TECH_LEAD:
+        if role == AgentRole.COORDINATOR:
             seen_prompts.append(ctx["prompt"])
             if len(seen_prompts) == 1:
                 # Turn 1: conversational answer without dispatching any WorkUnit
@@ -593,7 +611,7 @@ async def test_session_as_task_conversational_tech_lead_and_fast_path_delegation
                     usage=usage,
                     files_modified=False,
                 )
-            # Turn 2: Tech Lead decides to delegate via fast_path=True
+            # Turn 2: Coordinator decides to delegate via fast_path=True
             for tool in ctx["tools"]:
                 if getattr(tool, "__name__", "") == "dispatch_work_unit":
                     await tool(
@@ -887,9 +905,10 @@ def test_chat_cost_command_shows_limits_and_remaining(tmp_path: Path) -> None:
     )
     assert res_idle.exit_code == 0, res_idle.output
     assert "Cost & Budget" in res_idle.output
-    assert "No active task yet." in res_idle.output
+    assert "No active session yet." in res_idle.output
     assert "$0.0000 / $2.00 USD ($2.0000 left)" in res_idle.output
     assert f"$0.0000 / ${max_daily:.2f} USD (${max_daily:.4f} left)" in res_idle.output
+    assert "Monthly Spend" in res_idle.output
 
     # 2. After running a turn and granting a top-up: `/cost` shows task + daily spent, limits, left, and top-up
     run_res = asyncio.run(
@@ -914,7 +933,7 @@ def test_chat_cost_command_shows_limits_and_remaining(tmp_path: Path) -> None:
         obj=container,
     )
     assert res_active.exit_code == 0, res_active.output
-    assert "Task Budget:" in res_active.output
+    assert "Session Budget:" in res_active.output
     assert (
         f"${total_usd:.4f} / $3.50 USD (${task_left:.4f} left, +$1.50 top-up)"
         in res_active.output
@@ -924,6 +943,7 @@ def test_chat_cost_command_shows_limits_and_remaining(tmp_path: Path) -> None:
         f"${daily_spent:.4f} / ${max_daily:.2f} USD (${daily_left:.4f} left)"
         in res_active.output
     )
+    assert "Monthly Spend" in res_active.output
 
 
 def test_cross_process_session_management_list_continue_resume_rename_delete(
@@ -995,7 +1015,7 @@ def test_cross_process_session_management_list_continue_resume_rename_delete(
     assert "Renamed session" in res_continue.output
     assert "Zlib Final" in res_continue.output
     assert any("What version was found?" in str(t.get("prompt", "")) for t in seen2)
-    assert any(t.get("role") == AgentRole.TECH_LEAD for t in seen2)
+    assert any(t.get("role") == AgentRole.COORDINATOR for t in seen2)
 
     # Verify follow-up turns persisted cleanly in SQLite task_messages
     msgs = asyncio.run(container2.storage.list_task_messages(res_s1.task.id))
@@ -1071,9 +1091,226 @@ def test_budget_command_updates_and_persists_daily_limit(tmp_path: Path) -> None
         obj=container2,
     )
     assert res_resume.exit_code == 0, res_resume.output
-    assert "Resuming paused task..." in res_resume.output
+    assert "Resuming paused session..." in res_resume.output
     assert "COMPLETED" in res_resume.output
     assert container2.config.cost.policy.max_daily_usd == pytest.approx(25.06)
+
+
+def test_sessions_show_displays_work_unit_and_session_costs(tmp_path: Path) -> None:
+    """`sessions show` displays session cost breakdown, limits, and cost of every WorkUnit."""
+    from app.domain.cost import CostLedgerEntry
+    from app.domain.models import SubagentRun, Task, WorkUnit
+
+    container, _ = _make_test_container(tmp_path, max_task_usd=5.00)
+    asyncio.run(container.initialize())
+
+    async def _seed() -> None:
+        task = Task(
+            id="task_costs01",
+            title="Multi-WU Cost Breakdown",
+            prompt="Audit packages and kernel",
+            status=TaskStatus.COMPLETED,
+            domain="packages",
+        )
+        await container.storage.upsert_task(task)
+
+        wus = [
+            WorkUnit(
+                id=f"wu_{idx}",
+                task_id=task.id,
+                title=f"Unit {idx}",
+                domain="packages" if idx < 6 else "kernel",
+                target=f"pkg-{idx}",
+                pipeline_template="feature_code",
+                current_stage_name="review",
+                status="COMPLETED",
+            )
+            for idx in range(1, 7)
+        ]
+        for wu in wus:
+            await container.storage.upsert_work_unit(wu)
+
+        runs = [
+            # Tech Lead orchestration turn (not bound to a WorkUnit)
+            SubagentRun(
+                id="run_tl",
+                task_id=task.id,
+                work_unit_id=None,
+                role=AgentRole.TECH_LEAD,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=150,
+                candidate_tokens=50,
+                total_tokens=200,
+                usd_cost=0.0100,
+            ),
+            # wu_1 has two runs that must aggregate cleanly
+            SubagentRun(
+                id="run_wu1_a",
+                task_id=task.id,
+                work_unit_id="wu_1",
+                role=AgentRole.SENIOR_CODER,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=180,
+                candidate_tokens=70,
+                total_tokens=250,
+                usd_cost=0.0150,
+            ),
+            SubagentRun(
+                id="run_wu1_b",
+                task_id=task.id,
+                work_unit_id="wu_1",
+                role=AgentRole.REVIEWER,
+                model_alias="flash",
+                model_id="gemini-2.5-flash",
+                status="COMPLETED",
+                prompt_tokens=100,
+                candidate_tokens=50,
+                total_tokens=150,
+                usd_cost=0.0250,
+            ),
+            # wu_2..wu_6 each have one run (so >5 WUs verify nothing is truncated in `sessions show`)
+            SubagentRun(
+                id="run_wu2",
+                task_id=task.id,
+                work_unit_id="wu_2",
+                role=AgentRole.SENIOR_CODER,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=80,
+                candidate_tokens=20,
+                total_tokens=100,
+                usd_cost=0.0200,
+            ),
+            SubagentRun(
+                id="run_wu3",
+                task_id=task.id,
+                work_unit_id="wu_3",
+                role=AgentRole.SENIOR_CODER,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=80,
+                candidate_tokens=20,
+                total_tokens=100,
+                usd_cost=0.0100,
+            ),
+            SubagentRun(
+                id="run_wu4",
+                task_id=task.id,
+                work_unit_id="wu_4",
+                role=AgentRole.SENIOR_CODER,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=80,
+                candidate_tokens=20,
+                total_tokens=100,
+                usd_cost=0.0100,
+            ),
+            SubagentRun(
+                id="run_wu5",
+                task_id=task.id,
+                work_unit_id="wu_5",
+                role=AgentRole.SENIOR_CODER,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=80,
+                candidate_tokens=20,
+                total_tokens=100,
+                usd_cost=0.0100,
+            ),
+            SubagentRun(
+                id="run_wu6",
+                task_id=task.id,
+                work_unit_id="wu_6",
+                role=AgentRole.TROUBLESHOOTER,
+                model_alias="pro",
+                model_id="gemini-2.5-pro",
+                status="COMPLETED",
+                prompt_tokens=150,
+                candidate_tokens=50,
+                total_tokens=200,
+                usd_cost=0.0125,
+            ),
+        ]
+        for idx, run in enumerate(runs, start=1):
+            await container.storage.upsert_subagent_run(run)
+            await container.storage.record_cost_entry(
+                CostLedgerEntry(
+                    id=f"cost_{idx}",
+                    task_id=task.id,
+                    subagent_run_id=run.id,
+                    role=run.role.value,
+                    model_id=run.model_id,
+                    usage=TokenUsage(
+                        prompt_tokens=run.prompt_tokens,
+                        candidate_tokens=run.candidate_tokens,
+                        total_tokens=run.total_tokens,
+                    ),
+                    usd_cost=run.usd_cost,
+                )
+            )
+
+    asyncio.run(_seed())
+
+    runner = CliRunner()
+    res = runner.invoke(cli, ["sessions", "show", "task_costs01"], obj=container)
+    assert res.exit_code == 0, res.output
+    assert "Session Cost: $0.1125 USD / $5.00 limit ($4.8875 left)" in res.output
+    assert "1,200 tokens" in res.output
+    assert "WorkUnits (6):" in res.output
+    assert "wu_1: [COMPLETED] packages/pkg-1 (stage=review) — $0.0400, 400 tokens" in res.output
+    assert "wu_2: [COMPLETED] packages/pkg-2 (stage=review) — $0.0200, 100 tokens" in res.output
+    assert "wu_6: [COMPLETED] kernel/pkg-6 (stage=review) — $0.0125, 200 tokens" in res.output
+    assert "orchestration / direct: $0.0100, 200 tokens" in res.output
+
+
+def test_repl_sessions_id_commands_and_monthly_spend_after_delete(tmp_path: Path) -> None:
+    container, _ = _make_test_container(tmp_path)
+    asyncio.run(container.initialize())
+    res_s1 = asyncio.run(
+        container.single_agent_service.execute_prompt("Check zlib recipe", domain="packages")
+    )
+    res_s2 = asyncio.run(
+        container.single_agent_service.execute_prompt("Check kernel config", domain="kernel")
+    )
+
+    monthly_before = asyncio.run(container.storage.get_monthly_usd_spent())
+    assert monthly_before > 0.0
+
+    runner = CliRunner()
+    # Inspect s1 by SessionID, rename s1, delete s2 by SessionID, and check /cost
+    res = runner.invoke(
+        cli,
+        ["chat", "--resume", res_s2.task.id, "--no-worktree"],
+        input=(
+            f"/sessions {res_s1.task.id}\n"
+            f"/sessions rename {res_s1.task.id} Renamed S1\n"
+            f"/sessions delete {res_s2.task.id}\n"
+            "/cost\n"
+            "/exit\n"
+        ),
+        obj=container,
+    )
+    assert res.exit_code == 0, res.output
+    assert res_s1.task.id in res.output
+    assert f"Renamed session {res_s1.task.id} to: Renamed S1" in res.output
+    assert f"Deleted session {res_s2.task.id}" in res.output
+    # Active session s2 was deleted, so /cost should show no active session,
+    # while Monthly Spend still retains the spend from both s1 and s2!
+    assert "No active session yet." in res.output
+    assert f"${monthly_before:.4f}" in res.output
+    assert asyncio.run(container.storage.get_task(res_s2.task.id)) is None
+    monthly_after = asyncio.run(container.storage.get_monthly_usd_spent())
+    assert abs(monthly_after - monthly_before) < 1e-9
+
+
 
 
 

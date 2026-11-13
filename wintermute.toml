@@ -87,7 +87,7 @@ stages = [
 # 2. Package Lifecycle Pipeline (create, import, upgrade, fix)
 [pipeline.templates.package_lifecycle]
 description = "Freeside packaging flow: fast static manifest/dep verification before heavy sandbox build, troubleshooting loop, compliance review, and commit."
-max_retries_per_gate = 4
+max_retries_per_gate = 3
 stages = [
     { name = "scaffold_or_edit", kind = "agent", role = "coder", require_file_edits = true, instruction_hint = "Author or update package.manifest, package.justfile, and patches using Freeside packaging conventions." },
     { name = "static_verify", kind = "gate", validators = [
@@ -134,62 +134,75 @@ stages = [
 [models.argon]
 provider = "gemini"
 model = "gemini-4-argon"
-thinking_level = "medium"
 
 [models.hydrogen]
 provider = "gemini"
 model = "gemini-4-hydrogen"
-thinking_level = "medium"
 
-[models.flash]
-provider = "gemini"
-model = "gemini-3.8-flash"
-thinking_level = "medium"
-
+# [models.flash]
+# provider = "gemini"
+# model = "gemini-3.8-flash"
+#
 # [models.local_coder]
 # provider = "openai_compat"
 # model = "Qwen/Qwen2.5-Coder-32B-Instruct"
 # base_url = "http://localhost:8000/v1"
 # lightweight = true
 
+[agents.coordinator]
+model = "hydrogen"
+thinking_level = "low"
+compaction_token_threshold = 60_000
+max_model_calls = 25
+max_tool_calls = 50
+max_total_tokens = 250_000
+
 [agents.tech_lead]
 model = "argon"
-max_model_calls = 40
-max_tool_calls = 80
-max_total_tokens = 500_000
+thinking_level = "medium"
+compaction_token_threshold = 60_000
+max_model_calls = 25
+max_tool_calls = 50
+max_total_tokens = 250_000
 
 [agents.senior_coder]
 model = "hydrogen"
+thinking_level = "medium"
 max_model_calls = 30
 max_tool_calls = 60
 max_total_tokens = 300_000
 
 [agents.junior_coder]
-model = "flash"
+model = "hydrogen"
+thinking_level = "low"
 max_model_calls = 20
 max_tool_calls = 40
 max_total_tokens = 150_000
 
 [agents.troubleshooter]
 model = "hydrogen"
+thinking_level = "medium"
 max_model_calls = 25
 max_tool_calls = 50
 max_total_tokens = 250_000
 
 [agents.researcher]
-model = "flash"
+model = "hydrogen"
+thinking_level = "low"
 max_model_calls = 15
 max_tool_calls = 30
-max_total_tokens = 150_000
+max_total_tokens = 100_000
 
 [agents.reviewer]
 model = "hydrogen"
+thinking_level = "medium"
 max_model_calls = 12
 max_tool_calls = 20
-max_total_tokens = 150_000
+max_total_tokens = 120_000
 
 [agents.doc_writer]
-model = "flash"
+model = "hydrogen"
+thinking_level = "low"
 max_model_calls = 15
 max_tool_calls = 30
-max_total_tokens = 150_000
+max_total_tokens = 100_000
